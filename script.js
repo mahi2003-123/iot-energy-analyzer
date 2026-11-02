@@ -13,7 +13,7 @@ document.addEventListener("DOMContentLoaded", () => {
      1. CONSTANTS & SYSTEM STATE
      ========================================================================== */
   const BAUD_RATE = 115200;
-  const CURRENT_DEADBAND = 0.01; // 10mA threshold for instant continuous detection
+  const RUNNING_CURRENT_THRESHOLD = 0.12; // 0.12 A (120 mA): Motor running threshold (filters out idle sensor ADC noise)
   const MAX_CHART_POINTS = 30;
 
   let currentTariff = 8.00;
@@ -23,6 +23,8 @@ document.addEventListener("DOMContentLoaded", () => {
   let keepReading = false;
   let isConnected = false;
   let isConnecting = false;
+  let softwareZeroOffset = 0.0;
+  let lastRawCurrent = 0.0;
 
   // Active Device State (Amounts calculate strictly per device, not in overall)
   let activeDeviceName = "Device 1 (5V Motor)";
@@ -409,7 +411,7 @@ document.addEventListener("DOMContentLoaded", () => {
       bannerMachineState.classList.remove("running");
       dotMachineState.className = "state-indicator-dot idle";
       labelMachineState.textContent = "Machine Status: OFF (Standby / Idle)";
-      descMachineState.textContent = "Awaiting motor start (Current \u2264 0.04 A). Cost between ON and OFF is calculated and held.";
+      descMachineState.textContent = "Awaiting motor start (Current \u2264 0.12 A). Cost between ON and OFF is calculated and held.";
       if (statsSession) statsSession.style.display = "none";
       timerSession.textContent = "Run Time: 00:00";
 
@@ -736,33 +738,38 @@ document.addEventListener("DOMContentLoaded", () => {
   function handleTelemetryData(currentA, voltage, powerW) {
     const now = Date.now();
 
-    // Machine ON/OFF Detection with debounce filter
-    if (currentA > CURRENT_DEADBAND) {
+    // If current is below the idle noise floor (0.12 A), treat as 0.00 A (Motor is OFF)
+    const isMotorActive = currentA >= RUNNING_CURRENT_THRESHOLD;
+    const displayCurrent = isMotorActive ? currentA : 0.0;
+    const displayPower = isMotorActive ? (voltage * displayCurrent) : 0.0;
+
+    // Machine ON/OFF Detection with fast debounce filter
+    if (isMotorActive) {
       consecutiveZeroSamples = 0;
       if (!isMachineRunning) {
         setMachineRunning(true);
       }
-      sessionPeakCurrent = Math.max(sessionPeakCurrent, currentA);
-      sessionCurrentSamples.push(currentA);
+      sessionPeakCurrent = Math.max(sessionPeakCurrent, displayCurrent);
+      sessionCurrentSamples.push(displayCurrent);
     } else {
       if (isMachineRunning) {
         consecutiveZeroSamples++;
-        // Confirmed OFF after ~1.2s of consecutive idle readings (8 samples @ 150ms)
-        if (consecutiveZeroSamples >= 8) {
+        // Confirmed OFF after ~450ms of consecutive idle readings (3 samples @ 150ms)
+        if (consecutiveZeroSamples >= 3) {
           setMachineRunning(false);
           consecutiveZeroSamples = 0;
         }
       }
     }
 
-    // Accumulate energy SPECIFICALLY for the active device
+    // Accumulate energy SPECIFICALLY for the active device ONLY when motor is actively running
     if (lastTimestamp) {
       const elapsedMs = now - lastTimestamp;
       if (elapsedMs > 0 && elapsedMs < 60000) {
         const elapsedHours = elapsedMs / (1000 * 60 * 60);
-        const wattHoursDelta = powerW * elapsedHours;
+        const wattHoursDelta = displayPower * elapsedHours;
 
-        if (isMachineRunning) {
+        if (isMachineRunning && isMotorActive) {
           deviceWattHours += wattHoursDelta;
           sessionRunWattHours += wattHoursDelta;
         }
@@ -774,10 +781,10 @@ document.addEventListener("DOMContentLoaded", () => {
     const deviceKWh = deviceWattHours / 1000.0;
     const deviceAmount = deviceKWh * currentTariff;
 
-    renderDeviceMetrics(currentA, powerW, deviceWattHours, deviceAmount);
+    renderDeviceMetrics(displayCurrent, displayPower, deviceWattHours, deviceAmount);
     updateLiveRunCost();
-    updateContinuousProjection(currentA);
-    pushChartPoint(formatTimeHHMMSS(new Date()), powerW);
+    updateContinuousProjection(displayCurrent);
+    pushChartPoint(formatTimeHHMMSS(new Date()), displayPower);
   }
 
   /* ==========================================================================
@@ -791,15 +798,15 @@ document.addEventListener("DOMContentLoaded", () => {
     let baseDesc = `Operating load for ${activeDeviceName}`;
 
     if (typeof liveCurrent === "number") {
-      if (liveCurrent > CURRENT_DEADBAND) {
+      if (liveCurrent >= RUNNING_CURRENT_THRESHOLD) {
         lastKnownActiveCurrent = liveCurrent;
         activeCurrent = liveCurrent;
         baseType = "Live Load";
         baseDesc = "Real-time motor current";
-      } else if (isMachineRunning) {
-        activeCurrent = liveCurrent;
-        baseType = "Live Load";
-        baseDesc = "Real-time motor current";
+      } else {
+        activeCurrent = lastKnownActiveCurrent;
+        baseType = "Operating Reference";
+        baseDesc = `Last active load for ${activeDeviceName}`;
       }
     }
 
@@ -955,7 +962,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
     try {
       const data = JSON.parse(trimmed);
-      const currentA = typeof data.current === "number" ? Math.max(0, data.current) : 0.0;
+      const rawCurrentA = typeof data.current === "number" ? Math.max(0, data.current) : 0.0;
+      lastRawCurrent = rawCurrentA;
+      const currentA = Math.max(0, rawCurrentA - softwareZeroOffset);
       const voltage  = typeof data.voltage === "number" ? data.voltage : 5.0;
       const powerW   = typeof data.power === "number"   ? Math.max(0, data.power) : (voltage * currentA);
 
@@ -1003,6 +1012,13 @@ document.addEventListener("DOMContentLoaded", () => {
   if (btnTareSensor) {
     btnTareSensor.addEventListener("click", () => {
       sendSerialCommand("ZERO");
+      softwareZeroOffset = lastRawCurrent;
+      if (isMachineRunning) {
+        setMachineRunning(false);
+      }
+      consecutiveZeroSamples = 0;
+      renderDeviceMetrics(0.0, 0.0, deviceWattHours, (deviceWattHours / 1000.0) * currentTariff);
+      updateLiveRunCost();
       const originalText = btnTareSensor.innerHTML;
       btnTareSensor.textContent = "✓ Zero Calibrated!";
       setTimeout(() => {

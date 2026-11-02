@@ -660,6 +660,23 @@ body {
   color: #047857;
 }
 
+.state-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.machine-state-banner.running #btn-force-zero {
+  background: #ffffff;
+  border-color: #a7f3d0;
+  color: #065f46;
+}
+
+.machine-state-banner.running #btn-force-zero:hover {
+  background: #047857;
+  color: #ffffff;
+}
+
 .active-session-stats {
   display: flex;
   align-items: center;

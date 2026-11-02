@@ -13,7 +13,7 @@ document.addEventListener("DOMContentLoaded", () => {
      1. CONSTANTS & SYSTEM STATE
      ========================================================================== */
   const BAUD_RATE = 115200;
-  const RUNNING_CURRENT_THRESHOLD = 0.12; // 0.12 A (120 mA): Motor running threshold (filters out idle sensor ADC noise)
+  let runningCurrentThreshold = 0.15; // 0.15 A (150 mA) above zero baseline to detect motor running
   const MAX_CHART_POINTS = 30;
 
   let currentTariff = 8.00;
@@ -25,6 +25,8 @@ document.addEventListener("DOMContentLoaded", () => {
   let isConnecting = false;
   let softwareZeroOffset = 0.0;
   let lastRawCurrent = 0.0;
+  let isAutoTaring = false;
+  let autoTareSamples = [];
 
   // Active Device State (Amounts calculate strictly per device, not in overall)
   let activeDeviceName = "Device 1 (5V Motor)";
@@ -110,12 +112,14 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Sensor Live Diagnostics & Two-Way Calibration
   const btnTareSensor      = document.getElementById("btn-tare-sensor");
+  const btnForceZero       = document.getElementById("btn-force-zero");
   const diagSignalDot      = document.getElementById("diag-signal-dot");
   const diagRawMv          = document.getElementById("diag-raw-mv");
   const diagZeroMv         = document.getElementById("diag-zero-mv");
   const diagDeltaMv        = document.getElementById("diag-delta-mv");
   const selectSensorModel  = document.getElementById("select-sensor-model");
   const selectDividerMode  = document.getElementById("select-divider-mode");
+  const selectRunningThreshold = document.getElementById("select-running-threshold");
   const diagStatusHint     = document.getElementById("diag-status-hint");
 
   // History Log
@@ -252,6 +256,8 @@ document.addEventListener("DOMContentLoaded", () => {
     isConnected = connected;
 
     if (connected) {
+      isAutoTaring = true;
+      autoTareSamples = [];
       elDeviceStatus.className = "status-badge connected";
       elDeviceStatusText.textContent = "Connected (USB)";
       btnConnectUsb.textContent = "🔌 Disconnect";
@@ -738,8 +744,8 @@ document.addEventListener("DOMContentLoaded", () => {
   function handleTelemetryData(currentA, voltage, powerW) {
     const now = Date.now();
 
-    // If current is below the idle noise floor (0.12 A), treat as 0.00 A (Motor is OFF)
-    const isMotorActive = currentA >= RUNNING_CURRENT_THRESHOLD;
+    // If net current is below threshold, motor is OFF (Standby / Idle)
+    const isMotorActive = currentA >= runningCurrentThreshold;
     const displayCurrent = isMotorActive ? currentA : 0.0;
     const displayPower = isMotorActive ? (voltage * displayCurrent) : 0.0;
 
@@ -754,8 +760,8 @@ document.addEventListener("DOMContentLoaded", () => {
     } else {
       if (isMachineRunning) {
         consecutiveZeroSamples++;
-        // Confirmed OFF after ~450ms of consecutive idle readings (3 samples @ 150ms)
-        if (consecutiveZeroSamples >= 3) {
+        // Confirmed OFF after ~300ms of idle readings (2 samples @ 150ms)
+        if (consecutiveZeroSamples >= 2) {
           setMachineRunning(false);
           consecutiveZeroSamples = 0;
         }
@@ -798,7 +804,7 @@ document.addEventListener("DOMContentLoaded", () => {
     let baseDesc = `Operating load for ${activeDeviceName}`;
 
     if (typeof liveCurrent === "number") {
-      if (liveCurrent >= RUNNING_CURRENT_THRESHOLD) {
+      if (liveCurrent >= runningCurrentThreshold) {
         lastKnownActiveCurrent = liveCurrent;
         activeCurrent = liveCurrent;
         baseType = "Live Load";
@@ -964,6 +970,19 @@ document.addEventListener("DOMContentLoaded", () => {
       const data = JSON.parse(trimmed);
       const rawCurrentA = typeof data.current === "number" ? Math.max(0, data.current) : 0.0;
       lastRawCurrent = rawCurrentA;
+
+      // Auto-tare baseline on the first 6 samples after USB connection
+      if (isAutoTaring) {
+        autoTareSamples.push(rawCurrentA);
+        if (autoTareSamples.length >= 6) {
+          const avgBaseline = autoTareSamples.reduce((a, b) => a + b, 0) / autoTareSamples.length;
+          softwareZeroOffset = avgBaseline;
+          isAutoTaring = false;
+          console.log("[Auto-Tare] Zero baseline established at:", avgBaseline.toFixed(3), "A");
+        }
+      }
+
+      // Net current above calibrated zero baseline
       const currentA = Math.max(0, rawCurrentA - softwareZeroOffset);
       const voltage  = typeof data.voltage === "number" ? data.voltage : 5.0;
       const powerW   = typeof data.power === "number"   ? Math.max(0, data.power) : (voltage * currentA);
@@ -1008,22 +1027,47 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  // Two-Way Hardware Calibration & Configuration
+  // Two-Way Hardware Calibration & Zero Baseline
+  function calibrateZeroBaseline() {
+    softwareZeroOffset = lastRawCurrent;
+    sendSerialCommand("ZERO");
+    if (isMachineRunning) {
+      setMachineRunning(false);
+    }
+    consecutiveZeroSamples = 0;
+    renderDeviceMetrics(0.0, 0.0, deviceWattHours, (deviceWattHours / 1000.0) * currentTariff);
+    updateLiveRunCost();
+    updateContinuousProjection(0.0);
+  }
+
+  if (btnForceZero) {
+    btnForceZero.addEventListener("click", () => {
+      calibrateZeroBaseline();
+      const originalText = btnForceZero.innerHTML;
+      btnForceZero.textContent = "✓ Zero Set! (OFF)";
+      setTimeout(() => {
+        btnForceZero.innerHTML = originalText;
+      }, 1200);
+    });
+  }
+
   if (btnTareSensor) {
     btnTareSensor.addEventListener("click", () => {
-      sendSerialCommand("ZERO");
-      softwareZeroOffset = lastRawCurrent;
-      if (isMachineRunning) {
-        setMachineRunning(false);
-      }
-      consecutiveZeroSamples = 0;
-      renderDeviceMetrics(0.0, 0.0, deviceWattHours, (deviceWattHours / 1000.0) * currentTariff);
-      updateLiveRunCost();
+      calibrateZeroBaseline();
       const originalText = btnTareSensor.innerHTML;
       btnTareSensor.textContent = "✓ Zero Calibrated!";
       setTimeout(() => {
         btnTareSensor.innerHTML = originalText;
       }, 1200);
+    });
+  }
+
+  if (selectRunningThreshold) {
+    selectRunningThreshold.addEventListener("change", () => {
+      const val = parseFloat(selectRunningThreshold.value);
+      if (!isNaN(val) && val > 0) {
+        runningCurrentThreshold = val;
+      }
     });
   }
 

@@ -19,8 +19,10 @@ document.addEventListener("DOMContentLoaded", () => {
   let currentTariff = 8.00;
   let serialPort = null;
   let serialReader = null;
+  let readableStreamClosed = null;
   let keepReading = false;
   let isConnected = false;
+  let isConnecting = false;
 
   // Active Device State (Amounts calculate strictly per device, not in overall)
   let activeDeviceName = "Device 1 (5V Motor)";
@@ -654,17 +656,6 @@ document.addEventListener("DOMContentLoaded", () => {
       // Graceful offline fallback
     }
   }
-          voltage: voltage,
-          current: currentA,
-          power: powerW,
-          energy: devKWh,
-          cost: devAmount
-        })
-      });
-    } catch (_) {
-      // Graceful offline fallback
-    }
-  }
 
   // Manual Instant "Log Run Now" button
   if (btnLogCurrent) {
@@ -873,7 +864,7 @@ document.addEventListener("DOMContentLoaded", () => {
       keepReading = true;
 
       const textDecoder = new TextDecoderStream();
-      const readableStreamClosed = serialPort.readable.pipeTo(textDecoder.writable);
+      readableStreamClosed = serialPort.readable.pipeTo(textDecoder.writable);
       const reader = textDecoder.readable.getReader();
       serialReader = reader;
 
@@ -893,8 +884,12 @@ document.addEventListener("DOMContentLoaded", () => {
         }
       }
 
-      reader.releaseLock();
-      await readableStreamClosed.catch(() => {});
+      try {
+        reader.releaseLock();
+      } catch (_) {}
+      if (readableStreamClosed) {
+        await readableStreamClosed.catch(() => {});
+      }
 
     } catch (err) {
       console.warn("Serial connection failed or cancelled:", err);
@@ -915,7 +910,17 @@ document.addEventListener("DOMContentLoaded", () => {
       try {
         await serialReader.cancel();
       } catch (e) {}
+      try {
+        serialReader.releaseLock();
+      } catch (e) {}
       serialReader = null;
+    }
+
+    if (readableStreamClosed) {
+      try {
+        await readableStreamClosed;
+      } catch (e) {}
+      readableStreamClosed = null;
     }
 
     if (serialPort) {
@@ -1113,11 +1118,17 @@ document.addEventListener("DOMContentLoaded", () => {
   /* ==========================================================================
      12. BUTTON LISTENERS & INITIALIZATION
      ========================================================================== */
-  btnConnectUsb.addEventListener("click", () => {
+  btnConnectUsb.addEventListener("click", async () => {
+    if (isConnecting) return;
     if (isConnected) {
-      disconnectSerial();
+      await disconnectSerial();
     } else {
-      connectSerial();
+      isConnecting = true;
+      try {
+        await connectSerial();
+      } finally {
+        isConnecting = false;
+      }
     }
   });
 

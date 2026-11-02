@@ -30,7 +30,7 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
     ports:
-      - "5432:5432"
+      - "5433:5432" # Maps to 5433 on host to avoid conflict with local Windows PostgreSQL service
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./database/schema.sql:/docker-entrypoint-initdb.d/init.sql:ro

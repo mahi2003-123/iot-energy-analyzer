@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Smart Energy Consumption & Electricity Cost Analyzer</title>
+  
+  <!-- Inter & JetBrains Mono Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+  
+  <!-- Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+  
+  <!-- Custom Stylesheet -->
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app-container">
+    
+    <!-- Top Header -->
+    <header class="app-header">
+      <div class="header-left">
+        <h1 class="app-title">Energy Consumption & Electricity Cost Analyzer</h1>
+        <p class="app-subtitle">Direct Wired USB Connection &bull; ESP32-WROOM-32 &bull; ACS712 Sensor</p>
+      </div>
+
+      <!-- Hardware Port Status -->
+      <div class="device-info-box">
+        <div class="info-row">
+          <span class="info-label">Hardware:</span>
+          <span class="info-value" id="device-name">ESP32 ACS712 Monitor</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">Port Status:</span>
+          <span class="status-badge disconnected" id="device-status">
+            <span class="status-dot"></span>
+            <span id="device-status-text">Disconnected</span>
+          </span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Controls Toolbar (Connection Actions, Active Device Tag & Tariff Configuration) -->
+    <section class="controls-toolbar">
+      <!-- Left: USB Connect Action -->
+      <div class="usb-action-wrap">
+        <button type="button" class="btn btn-connect" id="btn-connect-usb">
+          🔌 Connect ESP32 (USB)
+        </button>
+        <span class="usb-hint" id="usb-hint">
+          Connect your ESP32 via USB and click Connect to start live monitoring.
+        </span>
+      </div>
+
+      <!-- Middle: Active Device Label (Amounts calculate specifically for this device) -->
+      <div class="device-selector-wrap">
+        <label for="device-name-input" class="config-label">Active Device:</label>
+        <div class="device-input-wrap">
+          <input 
+            type="text" 
+            id="device-name-input" 
+            value="Device 1 (5V Motor)" 
+            class="device-name-input"
+            title="Name or identifier of the device currently being measured"
+          >
+          <button type="button" class="btn btn-sm btn-outline" id="btn-new-device" title="Save this device calculation and start next device">
+            + Next Device
+          </button>
+        </div>
+      </div>
+
+      <!-- Right: Manually Editable Tariff Rate -->
+      <form id="tariff-form" class="tariff-form-inline" onsubmit="return false;">
+        <label for="tariff-input" class="config-label">Tariff Rate:</label>
+        <div class="tariff-input-wrap">
+          <span class="currency-symbol">₹</span>
+          <input 
+            type="number" 
+            id="tariff-input" 
+            value="8.00" 
+            step="0.10" 
+            min="0.1" 
+            max="200.0" 
+            required
+            title="Enter electricity cost in Rupees per kilowatt-hour"
+          >
+          <span class="unit-text">/ kWh</span>
+          <button type="submit" class="btn-dark" id="btn-save-tariff">Apply</button>
+        </div>
+        <div class="preset-links">
+          <button type="button" class="btn-preset" data-rate="6.50">₹6.50</button>
+          <button type="button" class="btn-preset active" data-rate="8.00">₹8.00</button>
+          <button type="button" class="btn-preset" data-rate="10.00">₹10.00</button>
+        </div>
+      </form>
+    </section>
+
+    <!-- Browser Compatibility Warning (if Web Serial unsupported) -->
+    <div class="browser-warning" id="browser-warning" style="display: none;">
+      ⚠️ Your browser does not support the Web Serial API. Please use <strong>Google Chrome</strong>, <strong>Microsoft Edge</strong>, or <strong>Brave</strong> to connect to your ESP32 over USB.
+    </div>
+
+    <!-- Connection Diagnostic Help Alert -->
+    <div class="connection-alert" id="connection-alert" style="display: none;">
+      <div>
+        <strong id="connection-alert-title">⚠️ Serial Port Connection Note:</strong>
+        <p id="connection-alert-msg" style="margin-top: 0.25rem;">
+          No serial device selected. If your ESP32 is plugged in but not visible in the port list:
+        </p>
+        <ul>
+          <li><strong>USB Data Cable:</strong> Make sure you are using a 4-wire USB data cable (many charging cables only have 2 power wires and carry no data).</li>
+          <li><strong>Driver Installed:</strong> Verify your ESP32 USB driver is installed (Silicon Labs CP210x or WCH CH340).</li>
+          <li><strong>Port Lock:</strong> Ensure no other software (PlatformIO serial monitor, Arduino IDE, PuTTY) has the COM port open.</li>
+        </ul>
+      </div>
+      <div class="alert-actions">
+        <button type="button" class="btn btn-sm btn-outline" id="btn-alert-dismiss">Dismiss</button>
+      </div>
+    </div>
+
+    <!-- Sensor Hardware Live Diagnostics & Two-Way Calibration Bar -->
+    <section class="sensor-diagnostics-bar">
+      <div class="diag-header-row">
+        <div class="diag-title-wrap">
+          <span class="diag-dot" id="diag-signal-dot"></span>
+          <strong class="diag-title">Sensor Calibration & Hardware Diagnostics (GPIO34)</strong>
+        </div>
+        <div class="diag-actions-wrap">
+          <button type="button" class="btn btn-sm btn-tare" id="btn-tare-sensor" title="Calibrate zero offset while gadget is turned OFF">
+            🎯 Tare / Zero Calibrate
+          </button>
+        </div>
+      </div>
+
+      <div class="diag-metrics-row">
+        <div class="diag-chip">
+          <span class="diag-chip-label">Pin Voltage (GPIO34)</span>
+          <span class="diag-chip-val" id="diag-raw-mv">-- mV</span>
+        </div>
+        <div class="diag-chip">
+          <span class="diag-chip-label">Zero Reference</span>
+          <span class="diag-chip-val" id="diag-zero-mv">-- mV</span>
+        </div>
+        <div class="diag-chip">
+          <span class="diag-chip-label">Voltage Delta (ΔV)</span>
+          <span class="diag-chip-val" id="diag-delta-mv">0.0 mV</span>
+        </div>
+        <div class="diag-chip">
+          <span class="diag-chip-label">Sensor Model</span>
+          <select id="select-sensor-model" class="diag-select">
+            <option value="100" selected>ACS712-20A (100 mV/A)</option>
+            <option value="185">ACS712-05B (185 mV/A)</option>
+            <option value="66">ACS712-30A (66 mV/A)</option>
+          </select>
+        </div>
+        <div class="diag-chip">
+          <span class="diag-chip-label">Wiring Divider</span>
+          <select id="select-divider-mode" class="diag-select">
+            <option value="0.5" selected>10k+10k Resistors (0.5x)</option>
+            <option value="1.0">Direct Wire (1.0x)</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="diag-status-hint" id="diag-status-hint">
+        💡 <strong>Calibration Tip:</strong> Turn your gadget <strong>OFF</strong>, then click <strong>"🎯 Tare / Zero Calibrate"</strong> to establish the zero baseline. Then turn your gadget <strong>ON</strong>.
+      </div>
+    </section>
+
+    <!-- Active Machine State Indicator Banner -->
+    <section class="machine-state-banner" id="machine-state-banner">
+      <div class="state-main">
+        <span class="state-indicator-dot idle" id="machine-dot"></span>
+        <div class="state-text-wrap">
+          <div class="state-title-row">
+            <strong id="machine-state-label">Machine Status: OFF (Standby / Idle)</strong>
+            <span class="state-session-timer" id="active-session-timer">Run Time: 00:00</span>
+          </div>
+          <span class="state-subtitle" id="machine-state-desc">
+            Awaiting motor start (Current &le; 0.04 A). When turned on, run duration, operating current, and running cost between ON and OFF will calculate live.
+          </span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Main Metrics: Current, Active Power & Run Cost (Between ON & OFF) -->
+    <main class="metrics-grid">
+      <!-- 1. Current -->
+      <div class="metric-card">
+        <div class="metric-header">
+          <span class="metric-label">Current</span>
+          <span class="metric-badge">⚡ Real-Time</span>
+        </div>
+        <div class="metric-value-row">
+          <span class="metric-number" id="current-display">0.00</span>
+          <span class="metric-unit">A</span>
+        </div>
+        <span class="metric-desc" id="current-calc-desc">ACS712 Sensor (GPIO34)</span>
+      </div>
+
+      <!-- 2. Power Consumption -->
+      <div class="metric-card">
+        <div class="metric-header">
+          <span class="metric-label">Active Power</span>
+          <span class="metric-badge">💡 5.0V DC</span>
+        </div>
+        <div class="metric-value-row">
+          <span class="metric-number" id="power-display">0.00</span>
+          <span class="metric-unit">W</span>
+        </div>
+        <span class="metric-desc" id="power-calc-desc">P = 5.0V &times; Current</span>
+      </div>
+
+      <!-- 3. Cost for Running Machine Between ON and OFF -->
+      <div class="metric-card highlight-card">
+        <div class="metric-header">
+          <span class="metric-label">Run Cost (ON ↔ OFF)</span>
+          <span class="metric-badge" id="run-cost-badge">⏱️ Between ON & OFF</span>
+        </div>
+        <div class="metric-value-row">
+          <span class="metric-currency">₹</span>
+          <span class="metric-number" id="run-cost-display">0.0000</span>
+        </div>
+        <span class="metric-desc" id="run-cost-desc">Cost for running between ON & OFF time</span>
+      </div>
+    </main>
+
+    <!-- Continuous Runtime Current & Consumption Estimator -->
+    <section class="continuous-projection-section">
+      <div class="projection-header">
+        <div>
+          <h2 class="section-title">Continuous Operation Projection</h2>
+          <p class="section-subtitle">
+            Calculate total current consumption (Ah / mAh), energy, and cost if the machine runs continuously for a specified duration.
+          </p>
+        </div>
+        <div class="hours-selector-wrap">
+          <label for="projection-hours-input" class="config-label">Continuous Run Time:</label>
+          <div class="hours-input-wrap">
+            <input 
+              type="number" 
+              id="projection-hours-input" 
+              value="1.0" 
+              step="0.5" 
+              min="0.1" 
+              max="1000.0" 
+              title="Enter runtime duration in hours"
+            >
+            <span class="unit-text">Hours</span>
+          </div>
+          <div class="preset-links">
+            <button type="button" class="btn-hour-preset active" data-hours="1">1h</button>
+            <button type="button" class="btn-hour-preset" data-hours="4">4h</button>
+            <button type="button" class="btn-hour-preset" data-hours="8">8h</button>
+            <button type="button" class="btn-hour-preset" data-hours="24">24h</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="projection-results-grid">
+        <!-- 1. Total Current Consumption (Ah) -->
+        <div class="projection-card highlight">
+          <div class="proj-header">
+            <span class="proj-label">Total Current Consumed</span>
+            <span class="proj-badge">Ah (Ampere-Hours)</span>
+          </div>
+          <div class="proj-value-row">
+            <span class="proj-number" id="proj-current-display">0.00</span>
+            <span class="proj-unit">Ah</span>
+          </div>
+          <span class="proj-desc" id="proj-current-sub">0 mAh total charge required</span>
+        </div>
+
+        <!-- 2. Projected Energy (kWh) -->
+        <div class="projection-card">
+          <div class="proj-header">
+            <span class="proj-label">Projected Energy</span>
+            <span class="proj-badge">kWh</span>
+          </div>
+          <div class="proj-value-row">
+            <span class="proj-number" id="proj-energy-display">0.0000</span>
+            <span class="proj-unit">kWh</span>
+          </div>
+          <span class="proj-desc" id="proj-energy-sub">At 5.0V DC supply</span>
+        </div>
+
+        <!-- 3. Projected Cost (₹) -->
+        <div class="projection-card">
+          <div class="proj-header">
+            <span class="proj-label">Projected Cost</span>
+            <span class="proj-badge">₹ INR</span>
+          </div>
+          <div class="proj-value-row">
+            <span class="proj-currency">₹</span>
+            <span class="proj-number" id="proj-cost-display">0.00</span>
+          </div>
+          <span class="proj-desc" id="proj-cost-sub">Tariff: ₹8.00 / kWh</span>
+        </div>
+
+        <!-- 4. Reference Current Used for Projection -->
+        <div class="projection-card">
+          <div class="proj-header">
+            <span class="proj-label">Calculation Base Load</span>
+            <span class="proj-badge" id="proj-base-type">Live Load</span>
+          </div>
+          <div class="proj-value-row">
+            <span class="proj-number" id="proj-base-current">0.00</span>
+            <span class="proj-unit">A</span>
+          </div>
+          <span class="proj-desc" id="proj-base-desc">Instantaneous motor current</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Machine Run History Log (Between ON and OFF) -->
+    <section class="history-section">
+      <div class="history-header">
+        <div>
+          <h2 class="section-title">Machine Run History Log</h2>
+          <p class="section-subtitle">
+            Records each machine run: exact operating duration between ON and OFF, current used, and calculated run cost.
+          </p>
+        </div>
+        <div class="history-actions">
+          <span class="summary-pill" id="history-total-summary">Runs Logged: 0 | Total Run Cost: ₹ 0.0000</span>
+          <button id="btn-log-current" class="btn btn-sm btn-dark" title="Save current active run to history log">
+            💾 Log Run Now
+          </button>
+          <button id="btn-clear-history" class="btn btn-sm btn-outline" title="Clear past recorded machine runs">
+            Clear History
+          </button>
+        </div>
+      </div>
+
+      <div class="table-responsive">
+        <table class="history-table" id="history-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Device Name</th>
+              <th>Start - End Time</th>
+              <th>Duration</th>
+              <th>Avg Current</th>
+              <th>Peak Current</th>
+              <th>Run Energy</th>
+              <th>Run Cost (ON ↔ OFF) (₹)</th>
+            </tr>
+          </thead>
+          <tbody id="history-table-body">
+            <tr class="empty-row" id="empty-history-row">
+              <td colspan="8">
+                No machine runs recorded yet. When the machine runs and stops (between ON and OFF), its operating duration and calculated cost will be logged here.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Real-time Chart Section -->
+    <section class="chart-section">
+      <div class="chart-header">
+        <div>
+          <h2 class="section-title">Live Power Consumption (Watts)</h2>
+          <span class="chart-caption" id="chart-caption">Awaiting USB Serial connection...</span>
+        </div>
+        <div class="chart-actions">
+          <button id="reset-counter-btn" class="btn btn-outline" title="Reset current device calculation and chart">
+            ↺ Reset Device Calculation
+          </button>
+        </div>
+      </div>
+
+      <div class="chart-canvas-wrapper">
+        <canvas id="powerChart"></canvas>
+      </div>
+    </section>
+
+    <!-- Minimal Footer -->
+    <footer class="app-footer">
+      <p>Smart Energy Consumption and Electricity Cost Analyzer &bull; Hardware Wired USB Mode &bull; 5.0V DC</p>
+    </footer>
+
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>

@@ -13,7 +13,7 @@ document.addEventListener("DOMContentLoaded", () => {
      1. CONSTANTS & SYSTEM STATE
      ========================================================================== */
   const BAUD_RATE = 115200;
-  let runningCurrentThreshold = 0.15; // 0.15 A (150 mA) above zero baseline to detect motor running
+  let runningCurrentThreshold = 0.35; // 0.35 A: Motor running threshold (filters out idle sensor noise and 0.28A offset)
   const MAX_CHART_POINTS = 30;
 
   let currentTariff = 8.00;
@@ -356,21 +356,25 @@ document.addEventListener("DOMContentLoaded", () => {
         elRunCostBadge.classList.add("running-badge");
       }
     } else {
-      // Standby / OFF: Show the completed cost of the last run between ON and OFF
+      // Standby / OFF: Show the completed cost of the last run between ON and OFF (frozen & held)
       if (lastCompletedRunCost > 0) {
         elRunCost.textContent = formatRunCostValue(lastCompletedRunCost);
         if (elRunCostDesc) {
-          elRunCostDesc.textContent = `Last Run: ${lastCompletedRunDurationStr} (${lastCompletedRunTimeRange})`;
+          elRunCostDesc.textContent = `Last Run: ${lastCompletedRunDurationStr} (${lastCompletedRunTimeRange}) - Stopped`;
+        }
+        if (elRunCostBadge) {
+          elRunCostBadge.textContent = "⏹️ Stopped (Cost Held)";
+          elRunCostBadge.classList.remove("running-badge");
         }
       } else {
         elRunCost.textContent = "0.0000";
         if (elRunCostDesc) {
           elRunCostDesc.textContent = "Cost for running between ON & OFF time";
         }
-      }
-      if (elRunCostBadge) {
-        elRunCostBadge.textContent = "⏱️ Between ON & OFF";
-        elRunCostBadge.classList.remove("running-badge");
+        if (elRunCostBadge) {
+          elRunCostBadge.textContent = "⏱️ Between ON & OFF";
+          elRunCostBadge.classList.remove("running-badge");
+        }
       }
     }
   }
@@ -391,7 +395,7 @@ document.addEventListener("DOMContentLoaded", () => {
       bannerMachineState.classList.add("running");
       dotMachineState.className = "state-indicator-dot active";
       labelMachineState.textContent = `Machine Status: ON (${activeDeviceName})`;
-      descMachineState.textContent = `Active load detected. Calculating current, power, and run cost between ON and OFF for ${activeDeviceName}.`;
+      descMachineState.textContent = `Active motor running detected. Live timer & run cost calculating.`;
       if (statsSession) statsSession.style.display = "flex";
       timerSession.textContent = "Run Time: 00:00";
 
@@ -414,18 +418,12 @@ document.addEventListener("DOMContentLoaded", () => {
         sessionTimerInterval = null;
       }
 
-      bannerMachineState.classList.remove("running");
-      dotMachineState.className = "state-indicator-dot idle";
-      labelMachineState.textContent = "Machine Status: OFF (Standby / Idle)";
-      descMachineState.textContent = "Awaiting motor start (Current \u2264 0.12 A). Cost between ON and OFF is calculated and held.";
-      if (statsSession) statsSession.style.display = "none";
-      timerSession.textContent = "Run Time: 00:00";
-
       // Calculate true elapsed time in seconds
       const elapsedMs = sessionStartTime
         ? (sessionEndTime.getTime() - sessionStartTime.getTime())
         : (sessionDurationSeconds * 1000);
       const durationSec = Math.max(1, Math.round(elapsedMs / 1000));
+      const stoppedDurationStr = formatSeconds(durationSec);
 
       // Auto-save run to history if any samples were captured or energy accumulated
       if (sessionCurrentSamples.length > 0 || sessionRunWattHours > 0 || deviceWattHours > 0) {
@@ -445,6 +443,13 @@ document.addEventListener("DOMContentLoaded", () => {
           sessionCurrentSamples
         );
       }
+
+      bannerMachineState.classList.remove("running");
+      dotMachineState.className = "state-indicator-dot idle";
+      labelMachineState.textContent = "Machine Status: OFF (Standby / Idle)";
+      descMachineState.textContent = `Motor stopped. Run duration: ${stoppedDurationStr} | Run cost: ₹${formatRunCostValue(lastCompletedRunCost)} calculated & held.`;
+      if (statsSession) statsSession.style.display = "none";
+      timerSession.textContent = `Run Time: ${stoppedDurationStr} (Stopped)`;
 
       // Reset run session state
       sessionRunWattHours = 0.0;

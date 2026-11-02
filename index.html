@@ -164,11 +164,11 @@
         </div>
         <div class="diag-chip">
           <span class="diag-chip-label">Start Threshold</span>
-          <select id="select-running-threshold" class="diag-select" title="Minimum current rise above zero to detect motor running">
-            <option value="0.10">0.10 A (Sensitive)</option>
-            <option value="0.15" selected>0.15 A (Default)</option>
-            <option value="0.25">0.25 A (Moderate)</option>
-            <option value="0.35">0.35 A (High)</option>
+          <select id="select-running-threshold" class="diag-select" title="Minimum current rise to detect motor running">
+            <option value="0.15">0.15 A (Low)</option>
+            <option value="0.25">0.25 A (Medium)</option>
+            <option value="0.35" selected>0.35 A (Standard 5V Motor)</option>
+            <option value="0.50">0.50 A (High)</option>
           </select>
         </div>
       </div>
@@ -399,6 +399,6 @@
 
   </div>
 
-  <script src="script.js?v=2.2"></script>
+  <script src="script.js?v=2.3"></script>
 </body>
 </html>

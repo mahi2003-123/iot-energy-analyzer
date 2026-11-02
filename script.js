@@ -331,7 +331,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (msg) msg.textContent = "When you click 'Connect ESP32 (USB)', a browser dialog appears. You must click 'Silicon Labs CP210x USB to UART Bridge (COM9)' in that dialog list first, and then click the blue 'Connect' button.";
       } else if (err && (err.name === "NetworkError" || (err.message && err.message.includes("Failed to open")))) {
         if (title) title.textContent = "⚠️ Port Locked / Busy:";
-        if (msg) msg.textContent = "COM9 could not be opened because another program (such as the Arduino IDE Serial Monitor) had the port open. Ensure the Arduino IDE Serial Monitor is closed.";
+        if (msg) msg.textContent = "COM9 is currently busy. Quick Fix: Unplug the USB cable and plug it back in (or close any other open dashboard tab), then click Connect.";
       } else {
         if (title) title.textContent = "⚠️ Serial Port Connection Note:";
         if (msg) msg.textContent = "Make sure your ESP32 is plugged in with a USB data cable and CP210x driver is active on COM9.";
@@ -918,7 +918,18 @@ document.addEventListener("DOMContentLoaded", () => {
 
     try {
       serialPort = await navigator.serial.requestPort();
-      await serialPort.open({ baudRate: BAUD_RATE });
+      
+      try {
+        await serialPort.open({ baudRate: BAUD_RATE });
+      } catch (openErr) {
+        // If port was briefly held during page reload, wait 600ms and retry once automatically
+        if (openErr.name === "NetworkError" || (openErr.message && openErr.message.includes("Failed to open"))) {
+          await new Promise(r => setTimeout(r, 600));
+          await serialPort.open({ baudRate: BAUD_RATE });
+        } else {
+          throw openErr;
+        }
+      }
 
       setConnectionUI(true);
       lastTimestamp = Date.now();
@@ -1122,6 +1133,13 @@ document.addEventListener("DOMContentLoaded", () => {
       disconnectSerial();
     });
   }
+
+  // Ensure serial port is cleanly released before page reload or tab close
+  window.addEventListener("beforeunload", () => {
+    if (isConnected) {
+      disconnectSerial();
+    }
+  });
 
   /* ==========================================================================
      11. REAL-TIME CHART SETUP

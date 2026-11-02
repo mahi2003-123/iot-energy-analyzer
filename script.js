@@ -190,7 +190,7 @@ document.addEventListener("DOMContentLoaded", () => {
     consecutiveZeroSamples = 0;
     lastTimestamp = Date.now();
 
-    softwareZeroOffset = lastRawCurrent;
+    softwareZeroOffset = 0.0;
     sendSerialCommand("ZERO");
 
     bannerMachineState.classList.remove("running");
@@ -1016,24 +1016,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
     try {
       const data = JSON.parse(trimmed);
-      const rawCurrentA = typeof data.current === "number" ? Math.max(0, data.current) : 0.0;
-      lastRawCurrent = rawCurrentA;
-
-      // Auto-tare baseline on the first 6 samples after USB connection (only if idle < 0.40 A)
-      if (isAutoTaring) {
-        autoTareSamples.push(rawCurrentA);
-        if (autoTareSamples.length >= 6) {
-          const avgBaseline = autoTareSamples.reduce((a, b) => a + b, 0) / autoTareSamples.length;
-          if (avgBaseline < 0.40) {
-            softwareZeroOffset = avgBaseline;
-            console.log("[Auto-Tare] Zero baseline established at:", avgBaseline.toFixed(3), "A");
-          }
-          isAutoTaring = false;
-        }
-      }
-
-      // Net current above calibrated zero baseline
-      const currentA = Math.max(0, rawCurrentA - softwareZeroOffset);
+      const currentA = typeof data.current === "number" ? Math.max(0, data.current) : 0.0;
+      lastRawCurrent = currentA;
       const voltage  = typeof data.voltage === "number" ? data.voltage : 5.0;
       const powerW   = typeof data.power === "number"   ? Math.max(0, data.power) : (voltage * currentA);
 
@@ -1079,7 +1063,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Two-Way Hardware Calibration & Zero Baseline
   function calibrateZeroBaseline() {
-    softwareZeroOffset = lastRawCurrent;
+    softwareZeroOffset = 0.0;
     sendSerialCommand("ZERO");
     if (isMachineRunning) {
       setMachineRunning(false);

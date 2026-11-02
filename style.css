@@ -664,6 +664,31 @@ body {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+#btn-restart-zero {
+  background: var(--border-dark);
+  color: #ffffff;
+  border: 1px solid var(--border-dark);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+#btn-restart-zero:hover {
+  background: #1e293b;
+  border-color: #1e293b;
+}
+
+.machine-state-banner.running #btn-restart-zero {
+  background: #065f46;
+  border-color: #065f46;
+  color: #ffffff;
+}
+
+.machine-state-banner.running #btn-restart-zero:hover {
+  background: #047857;
+  border-color: #047857;
 }
 
 .machine-state-banner.running #btn-force-zero {

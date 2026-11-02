@@ -113,6 +113,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // Sensor Live Diagnostics & Two-Way Calibration
   const btnTareSensor      = document.getElementById("btn-tare-sensor");
   const btnForceZero       = document.getElementById("btn-force-zero");
+  const btnRestartZero     = document.getElementById("btn-restart-zero");
   const diagSignalDot      = document.getElementById("diag-signal-dot");
   const diagRawMv          = document.getElementById("diag-raw-mv");
   const diagZeroMv         = document.getElementById("diag-zero-mv");
@@ -161,47 +162,89 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  // Next Device button: logs any active device run and starts a fresh calculation for the next device
-  if (btnNewDevice) {
-    btnNewDevice.addEventListener("click", () => {
-      // If machine was running, stopping it auto-logs the run
-      if (isMachineRunning) {
-        setMachineRunning(false);
-      } else if (sessionCurrentSamples.length > 0 || sessionRunWattHours > 0 || deviceWattHours > 0) {
-        const now = new Date();
-        const durationSec = Math.max(1, sessionDurationSeconds);
-        recordCompletedDeviceRun(
-          activeDeviceName,
-          sessionStartTime || new Date(now.getTime() - durationSec * 1000),
-          now,
-          durationSec,
-          sessionRunWattHours > 0 ? sessionRunWattHours : deviceWattHours,
-          sessionPeakCurrent,
-          sessionCurrentSamples
-        );
+  // Full Reset to Zero for Testing New Machine
+  function resetAllToZeroForNewMachine(isNewDevice = false) {
+    if (isMachineRunning) {
+      isMachineRunning = false;
+      if (sessionTimerInterval) {
+        clearInterval(sessionTimerInterval);
+        sessionTimerInterval = null;
       }
+    }
 
-      // Reset device calculation
+    if (isNewDevice) {
       deviceCounter++;
       activeDeviceName = `Device ${deviceCounter} (5V Motor)`;
       if (inputDeviceName) inputDeviceName.value = activeDeviceName;
+    }
 
-      deviceWattHours = 0.0;
-      sessionRunWattHours = 0.0;
-      sessionDurationSeconds = 0;
-      sessionPeakCurrent = 0.0;
-      sessionCurrentSamples = [];
-      sessionStartTime = null;
+    deviceWattHours = 0.0;
+    sessionRunWattHours = 0.0;
+    sessionDurationSeconds = 0;
+    sessionPeakCurrent = 0.0;
+    sessionCurrentSamples = [];
+    sessionStartTime = null;
+    lastCompletedRunCost = 0.0;
+    lastCompletedRunDurationStr = "00:00";
+    lastCompletedRunTimeRange = "";
+    consecutiveZeroSamples = 0;
+    lastTimestamp = Date.now();
 
-      renderDeviceMetrics(0.0, 0.0, 0.0, 0.0);
-      updateDeviceDescriptions();
+    softwareZeroOffset = lastRawCurrent;
+    sendSerialCommand("ZERO");
 
-      // Button feedback
+    bannerMachineState.classList.remove("running");
+    dotMachineState.className = "state-indicator-dot idle";
+    labelMachineState.textContent = `Machine Status: OFF (${activeDeviceName})`;
+    descMachineState.textContent = `Ready for new machine test. All counters zeroed. Turn on motor to start timing and cost calculation.`;
+    timerSession.textContent = "Run Time: 00:00";
+    if (statsSession) statsSession.style.display = "none";
+
+    renderDeviceMetrics(0.0, 0.0, 0.0, 0.0);
+    if (elCurrent) elCurrent.textContent = "0.00";
+    if (elPower)   elPower.textContent   = "0.00";
+    if (elRunCost) elRunCost.textContent = "0.0000";
+    if (elRunCostBadge) {
+      elRunCostBadge.textContent = "⏱️ Between ON & OFF";
+      elRunCostBadge.classList.remove("running-badge");
+    }
+    if (elRunCostDesc) {
+      elRunCostDesc.textContent = "Cost for running between ON & OFF time";
+    }
+
+    if (chart) {
+      chart.data.labels = [];
+      chart.data.datasets[0].data = [];
+      chart.update();
+    }
+
+    updateDeviceDescriptions();
+    updateContinuousProjection(0.0);
+  }
+
+  // Next Device button: logs any active device run and starts a fresh calculation for the next device
+  if (btnNewDevice) {
+    btnNewDevice.addEventListener("click", () => {
+      resetAllToZeroForNewMachine(true);
+
       const originalText = btnNewDevice.innerHTML;
-      btnNewDevice.textContent = "✓ Started New Device";
+      btnNewDevice.textContent = "✓ Next Device Started!";
       setTimeout(() => {
         btnNewDevice.innerHTML = originalText;
-      }, 1000);
+      }, 1200);
+    });
+  }
+
+  // Prominent "Reset to Zero (New Machine)" button in banner
+  if (btnRestartZero) {
+    btnRestartZero.addEventListener("click", () => {
+      resetAllToZeroForNewMachine(false);
+
+      const originalText = btnRestartZero.innerHTML;
+      btnRestartZero.textContent = "✓ All Zeroed! (Ready)";
+      setTimeout(() => {
+        btnRestartZero.innerHTML = originalText;
+      }, 1200);
     });
   }
 
@@ -1200,24 +1243,7 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   btnResetCounter.addEventListener("click", () => {
-    deviceWattHours = 0.0;
-    sessionRunWattHours = 0.0;
-    sessionDurationSeconds = 0;
-    sessionPeakCurrent = 0.0;
-    sessionCurrentSamples = [];
-    lastCompletedRunCost = 0.0;
-    lastCompletedRunDurationStr = "00:00";
-    lastCompletedRunTimeRange = "";
-    lastTimestamp = Date.now();
-
-    renderDeviceMetrics(0.0, 0.0, 0.0, 0.0);
-    updateLiveRunCost();
-
-    if (chart) {
-      chart.data.labels = [];
-      chart.data.datasets[0].data = [];
-      chart.update();
-    }
+    resetAllToZeroForNewMachine(false);
 
     const originalText = btnResetCounter.innerHTML;
     btnResetCounter.textContent = "✓ Reset Device Calculation";

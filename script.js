@@ -13,7 +13,7 @@ document.addEventListener("DOMContentLoaded", () => {
      1. CONSTANTS & SYSTEM STATE
      ========================================================================== */
   const BAUD_RATE = 115200;
-  let runningCurrentThreshold = 0.35; // 0.35 A: Motor running threshold (filters out idle sensor noise and 0.28A offset)
+  let runningCurrentThreshold = 0.08; // 0.08 A (80 mA) above baseline: detects small 5V DC motor start immediately
   const MAX_CHART_POINTS = 30;
 
   let currentTariff = 8.00;
@@ -976,14 +976,16 @@ document.addEventListener("DOMContentLoaded", () => {
       const rawCurrentA = typeof data.current === "number" ? Math.max(0, data.current) : 0.0;
       lastRawCurrent = rawCurrentA;
 
-      // Auto-tare baseline on the first 6 samples after USB connection
+      // Auto-tare baseline on the first 6 samples after USB connection (only if idle < 0.40 A)
       if (isAutoTaring) {
         autoTareSamples.push(rawCurrentA);
         if (autoTareSamples.length >= 6) {
           const avgBaseline = autoTareSamples.reduce((a, b) => a + b, 0) / autoTareSamples.length;
-          softwareZeroOffset = avgBaseline;
+          if (avgBaseline < 0.40) {
+            softwareZeroOffset = avgBaseline;
+            console.log("[Auto-Tare] Zero baseline established at:", avgBaseline.toFixed(3), "A");
+          }
           isAutoTaring = false;
-          console.log("[Auto-Tare] Zero baseline established at:", avgBaseline.toFixed(3), "A");
         }
       }
 

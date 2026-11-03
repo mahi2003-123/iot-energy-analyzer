@@ -13,7 +13,7 @@ document.addEventListener("DOMContentLoaded", () => {
      1. CONSTANTS & SYSTEM STATE
      ========================================================================== */
   const BAUD_RATE = 115200;
-  let runningCurrentThreshold = 0.006; // 0.006 A (6 mA): detects any running motor start immediately
+  let runningCurrentThreshold = 0.02; // 0.02 A (20 mA): filters resting noise and triggers on actual motor start
   const MAX_CHART_POINTS = 30;
 
   let currentTariff = 8.00;
@@ -201,6 +201,7 @@ document.addEventListener("DOMContentLoaded", () => {
     lastTimestamp = Date.now();
 
     softwareZeroOffset = 0.0;
+    sendSerialCommand("ZERO");
 
     bannerMachineState.classList.remove("running");
     dotMachineState.className = "state-indicator-dot idle";
@@ -827,12 +828,22 @@ document.addEventListener("DOMContentLoaded", () => {
   function handleTelemetryData(currentA, voltage, powerW) {
     const now = Date.now();
 
+    // Sanity filter for un-tared baseline offset:
+    // A 5V DC hobby motor draws between 0.02A and 2.5A.
+    // If incoming current is > 3.0A (e.g. 22.16A) while the machine is not running,
+    // this is 100% an un-tared resting offset. Auto-send ZERO and suppress false start!
+    if (currentA > 3.0 && !isMachineRunning) {
+      sendSerialCommand("ZERO");
+      renderDeviceMetrics(0.0, 0.0, deviceWattHours, (deviceWattHours / 1000.0) * currentTariff);
+      return;
+    }
+
     // Motor Active Sensing with Hysteresis & Delta-mV backup:
-    // - To START automatically: Current >= threshold (0.006 A) OR sensor delta >= 1.5 mV
-    // - To MAINTAIN running state: Holds down to 0.003 A OR sensor delta >= 1.0 mV (prevents brush ripple cutoffs)
+    // - To START automatically: Current >= threshold (default 0.02 A) OR sensor delta >= 2.0 mV
+    // - To MAINTAIN running state: Holds down to 0.008 A OR sensor delta >= 1.0 mV (prevents brush ripple cutoffs)
     const isSensorActive = isMachineRunning 
-      ? (currentA >= 0.003 || Math.abs(latestDeltaMv) >= 1.0)
-      : (currentA >= runningCurrentThreshold || Math.abs(latestDeltaMv) >= 1.5);
+      ? (currentA >= 0.008 || Math.abs(latestDeltaMv) >= 1.0)
+      : (currentA >= runningCurrentThreshold || Math.abs(latestDeltaMv) >= 2.0);
 
     const isMotorActive = isSensorActive || manualRunActive;
 
@@ -980,9 +991,9 @@ document.addEventListener("DOMContentLoaded", () => {
       lastTimestamp = Date.now();
       keepReading = true;
 
-      // Ensure clean 2.5V zero baseline and sync parameters to ESP32 on connect
+      // Auto-tare zero baseline and sync parameters to ESP32 on connect
       setTimeout(() => {
-        sendSerialCommand("RESET_ZERO");
+        sendSerialCommand("ZERO");
         if (selectSensorModel) sendSerialCommand(`SENS:${selectSensorModel.value}`);
         if (selectDividerMode) sendSerialCommand(`DIV:${selectDividerMode.value}`);
         sendSerialCommand("DEADBAND:0.01");
@@ -1139,6 +1150,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // Two-Way Hardware Calibration & Zero Baseline
   function calibrateZeroBaseline() {
     softwareZeroOffset = 0.0;
+    sendSerialCommand("ZERO");
     if (isMachineRunning) {
       setMachineRunning(false);
     }
@@ -1151,9 +1163,10 @@ document.addEventListener("DOMContentLoaded", () => {
   if (btnResetBaseline) {
     btnResetBaseline.addEventListener("click", () => {
       softwareZeroOffset = 0.0;
-      sendSerialCommand("RESET_ZERO");
+      sendSerialCommand("ZERO");
+      calibrateZeroBaseline();
       const originalText = btnResetBaseline.innerHTML;
-      btnResetBaseline.textContent = "✓ Baseline Restored (2.5V)";
+      btnResetBaseline.textContent = "✓ Baseline Zeroed";
       setTimeout(() => {
         btnResetBaseline.innerHTML = originalText;
       }, 1500);

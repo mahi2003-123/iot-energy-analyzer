@@ -134,10 +134,8 @@ void checkIncomingSerialCommands() {
     String cmd = Serial.readStringUntil('\n');
     cmd.trim();
 
-    if (cmd == "ZERO" || cmd == "TARE" || cmd == "CALIBRATE") {
+    if (cmd == "ZERO" || cmd == "TARE" || cmd == "CALIBRATE" || cmd == "RESET_ZERO" || cmd == "DEFAULT_ZERO") {
       calibrateZeroCurrentOffset();
-    } else if (cmd == "RESET_ZERO" || cmd == "DEFAULT_ZERO") {
-      zeroCurrentSensorMv = 2500.0f;
     } else if (cmd.startsWith("SENS:")) {
       float s = cmd.substring(5).toFloat();
       if (s > 10.0f && s < 500.0f) sensorSensitivityMvPerA = s;

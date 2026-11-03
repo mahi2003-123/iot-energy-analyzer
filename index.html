@@ -168,12 +168,12 @@
         <div class="diag-chip">
           <span class="diag-chip-label">Start Threshold</span>
           <select id="select-running-threshold" class="diag-select" title="Minimum current rise to detect motor running">
-            <option value="0.02">0.02 A (20 mA - Ultra Sensitive)</option>
-            <option value="0.03" selected>0.03 A (30 mA - Small 5V Motor, Recommended)</option>
-            <option value="0.05">0.05 A (50 mA - Sensitive)</option>
-            <option value="0.08">0.08 A (80 mA - Standard)</option>
-            <option value="0.15">0.15 A (Medium)</option>
-            <option value="0.25">0.25 A (High)</option>
+            <option value="0.015">0.015 A (15 mA - Auto High Sensitivity)</option>
+            <option value="0.02" selected>0.02 A (20 mA - 5V DC Motor Default)</option>
+            <option value="0.03">0.03 A (30 mA - Standard Motor)</option>
+            <option value="0.05">0.05 A (50 mA - Medium Load)</option>
+            <option value="0.08">0.08 A (80 mA - Heavy Load)</option>
+            <option value="0.15">0.15 A (150 mA)</option>
           </select>
         </div>
       </div>
@@ -198,9 +198,6 @@
         </div>
       </div>
       <div class="state-actions">
-        <button type="button" class="btn btn-sm btn-primary" id="btn-toggle-run" title="Start or stop run timer immediately (auto or manual)">
-          ▶ Start Run
-        </button>
         <button type="button" class="btn btn-sm btn-dark" id="btn-restart-zero" title="Restart timer, held cost, and energy completely to 0.00 to test a new machine">
           🔄 Reset to Zero (New Machine)
         </button>

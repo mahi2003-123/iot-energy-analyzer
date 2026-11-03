@@ -13,7 +13,7 @@ document.addEventListener("DOMContentLoaded", () => {
      1. CONSTANTS & SYSTEM STATE
      ========================================================================== */
   const BAUD_RATE = 115200;
-  let runningCurrentThreshold = 0.015; // 0.015 A (15 mA): ultra-responsive automatic motor start sensing
+  let runningCurrentThreshold = 0.006; // 0.006 A (6 mA): detects any running motor start immediately
   const MAX_CHART_POINTS = 30;
 
   let currentTariff = 8.00;
@@ -795,11 +795,11 @@ document.addEventListener("DOMContentLoaded", () => {
     const now = Date.now();
 
     // Motor Active Sensing:
-    // When motor starts working, currentA will be > 0.015 A (deadband on ESP32 is 0.02 A)
-    const isMotorActive = currentA > 0.015;
+    // When motor starts working, currentA will be >= runningCurrentThreshold (0.006 A / 6 mA)
+    const isMotorActive = currentA >= runningCurrentThreshold;
 
     // Display actual current and power
-    const displayCurrent = currentA > 0.01 ? currentA : 0.0;
+    const displayCurrent = currentA >= 0.005 ? currentA : 0.0;
     const displayPower   = displayCurrent > 0 ? (powerW > 0 ? powerW : (voltage * displayCurrent)) : 0.0;
 
     // Automatic Machine ON / OFF Tracking
@@ -1044,8 +1044,8 @@ document.addEventListener("DOMContentLoaded", () => {
       const data = JSON.parse(trimmed);
       let currentA = typeof data.current === "number" ? Math.max(0, data.current) : 0.0;
       
-      // Fallback: If firmware deadband clamped current to 0, check raw delta_mv under load
-      if (currentA <= 0.01 && typeof data.delta_mv === "number" && Math.abs(data.delta_mv) >= 2.0) {
+      // Fallback: If firmware deadband clamped current to 0, reconstruct from ANY delta_mv under load
+      if (currentA <= 0.008 && typeof data.delta_mv === "number" && Math.abs(data.delta_mv) >= 0.5) {
         const sens = (selectSensorModel && parseFloat(selectSensorModel.value)) || 100.0;
         const estCurrent = Math.abs(data.delta_mv) / sens;
         if (estCurrent > currentA) {
@@ -1134,6 +1134,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   if (btnTareSensor) {
     btnTareSensor.addEventListener("click", () => {
+      sendSerialCommand("ZERO");
       calibrateZeroBaseline();
       const originalText = btnTareSensor.innerHTML;
       btnTareSensor.textContent = "✓ Zero Calibrated!";

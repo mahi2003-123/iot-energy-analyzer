@@ -20,7 +20,7 @@ const int SENSOR_PIN = 34; // ESP32 GPIO34 (ADC1 Channel 6, Input Only)
 float sensorSensitivityMvPerA = 100.0f; // ACS712-20A (100 mV/A). ACS712-05B: 185, ACS712-30A: 66
 float voltageDividerRatio     = 0.50f;  // 10k + 10k divider (0.50). Direct connection: 1.0
 float loadVoltage             = 5.0f;   // Fixed 5.0V DC supply
-float currentDeadband         = 0.02f;  // 20mA sensitivity threshold
+float currentDeadband         = 0.005f; // 5mA sensitivity threshold (detects all small motors)
 
 // Timing & Averaging
 const unsigned long SERIAL_INTERVAL_MS = 1000; // Stream readings every 1.0 second

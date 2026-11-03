@@ -13,7 +13,7 @@ document.addEventListener("DOMContentLoaded", () => {
      1. CONSTANTS & SYSTEM STATE
      ========================================================================== */
   const BAUD_RATE = 115200;
-  let runningCurrentThreshold = 0.08; // 0.08 A (80 mA) above baseline: detects small 5V DC motor start immediately
+  let runningCurrentThreshold = 0.03; // Default 0.03 A (30 mA): ultra-responsive detection for 5V DC hobby motors
   const MAX_CHART_POINTS = 30;
 
   let currentTariff = 8.00;
@@ -37,6 +37,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Active Running Session State (Between ON and OFF)
   let isMachineRunning = false;
+  let manualRunActive = false; // Set when user manually clicks Start Run
   let sessionStartTime = null;
   let sessionDurationSeconds = 0;
   let sessionTimerInterval = null;
@@ -111,6 +112,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const elProjBaseDesc     = document.getElementById("proj-base-desc");
 
   // Sensor Live Diagnostics & Two-Way Calibration
+  const btnToggleRun       = document.getElementById("btn-toggle-run");
+  const btnResetBaseline   = document.getElementById("btn-reset-baseline");
   const btnTareSensor      = document.getElementById("btn-tare-sensor");
   const btnForceZero       = document.getElementById("btn-force-zero");
   const btnRestartZero     = document.getElementById("btn-restart-zero");
@@ -164,12 +167,18 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Full Reset to Zero for Testing New Machine
   function resetAllToZeroForNewMachine(isNewDevice = false) {
+    manualRunActive = false;
     if (isMachineRunning) {
       isMachineRunning = false;
       if (sessionTimerInterval) {
         clearInterval(sessionTimerInterval);
         sessionTimerInterval = null;
       }
+    }
+
+    if (btnToggleRun) {
+      btnToggleRun.textContent = "▶ Start Run";
+      btnToggleRun.classList.remove("is-running");
     }
 
     if (isNewDevice) {
@@ -422,12 +431,16 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  function setMachineRunning(running) {
-    if (running === isMachineRunning) return;
+  function setMachineRunning(running, isManual = false) {
+    if (running === isMachineRunning) {
+      if (running && isManual) manualRunActive = true;
+      return;
+    }
 
     if (running) {
       // Machine switched ON
       isMachineRunning = true;
+      if (isManual) manualRunActive = true;
       sessionStartTime = new Date();
       sessionDurationSeconds = 0;
       sessionPeakCurrent = 0.0;
@@ -438,27 +451,42 @@ document.addEventListener("DOMContentLoaded", () => {
       bannerMachineState.classList.add("running");
       dotMachineState.className = "state-indicator-dot active";
       labelMachineState.textContent = `Machine Status: ON (${activeDeviceName})`;
-      descMachineState.textContent = `Active motor running detected. Live timer & run cost calculating.`;
+      descMachineState.textContent = isManual 
+        ? `Manual machine run active. Live timer & run cost calculating.` 
+        : `Active motor running detected. Live timer & run cost calculating.`;
       if (statsSession) statsSession.style.display = "flex";
       timerSession.textContent = "Run Time: 00:00";
 
+      if (btnToggleRun) {
+        btnToggleRun.textContent = "⏹ Stop Run";
+        btnToggleRun.classList.add("is-running");
+      }
+
       if (sessionTimerInterval) clearInterval(sessionTimerInterval);
       sessionTimerInterval = setInterval(() => {
-        sessionDurationSeconds++;
-        timerSession.textContent = `Run Time: ${formatSeconds(sessionDurationSeconds)}`;
+        if (!sessionStartTime) return;
+        const elapsedSec = Math.max(0, Math.floor((Date.now() - sessionStartTime.getTime()) / 1000));
+        sessionDurationSeconds = elapsedSec;
+        timerSession.textContent = `Run Time: ${formatSeconds(elapsedSec)}`;
         updateLiveRunCost();
-      }, 1000);
+      }, 500);
       updateLiveRunCost();
 
     } else {
       // Machine switched OFF
       if (!isMachineRunning) return;
+      manualRunActive = false;
       isMachineRunning = false;
       const sessionEndTime = new Date();
 
       if (sessionTimerInterval) {
         clearInterval(sessionTimerInterval);
         sessionTimerInterval = null;
+      }
+
+      if (btnToggleRun) {
+        btnToggleRun.textContent = "▶ Start Run";
+        btnToggleRun.classList.remove("is-running");
       }
 
       // Calculate true elapsed time in seconds
@@ -468,11 +496,11 @@ document.addEventListener("DOMContentLoaded", () => {
       const durationSec = Math.max(1, Math.round(elapsedMs / 1000));
       const stoppedDurationStr = formatSeconds(durationSec);
 
-      // Auto-save run to history if any samples were captured or energy accumulated
-      if (sessionCurrentSamples.length > 0 || sessionRunWattHours > 0 || deviceWattHours > 0) {
-        const avg = sessionCurrentSamples.length > 0
+      // Auto-save run to history if duration >= 1 sec
+      if (durationSec >= 1) {
+        const avg = (sessionCurrentSamples && sessionCurrentSamples.length > 0)
           ? (sessionCurrentSamples.reduce((a, b) => a + b, 0) / sessionCurrentSamples.length)
-          : (sessionPeakCurrent || 0.19);
+          : (sessionPeakCurrent || lastKnownActiveCurrent || 0.19);
         const physicalWh = 5.0 * avg * (durationSec / 3600.0);
         const runWh = Math.max(sessionRunWattHours, physicalWh);
 
@@ -794,22 +822,23 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // If net current is below threshold, motor is OFF (Standby / Idle)
     const isMotorActive = currentA >= runningCurrentThreshold;
-    const displayCurrent = isMotorActive ? currentA : 0.0;
-    const displayPower = isMotorActive ? (voltage * displayCurrent) : 0.0;
+    const displayCurrent = isMotorActive ? currentA : (manualRunActive ? currentA : 0.0);
+    const displayPower = isMotorActive ? (voltage * displayCurrent) : (manualRunActive && displayCurrent > 0 ? (voltage * displayCurrent) : 0.0);
 
-    // Machine ON/OFF Detection with fast debounce filter
+    // Machine ON/OFF Detection with robust debounce filter
     if (isMotorActive) {
       consecutiveZeroSamples = 0;
       if (!isMachineRunning) {
-        setMachineRunning(true);
+        setMachineRunning(true, false);
       }
       sessionPeakCurrent = Math.max(sessionPeakCurrent, displayCurrent);
       sessionCurrentSamples.push(displayCurrent);
     } else {
-      if (isMachineRunning) {
+      if (isMachineRunning && !manualRunActive) {
         consecutiveZeroSamples++;
-        // Confirmed OFF after ~300ms of idle readings (2 samples @ 150ms)
-        if (consecutiveZeroSamples >= 2) {
+        // Confirmed OFF after ~2.4 seconds of continuous idle readings (16 samples @ 150ms)
+        // Prevents motor brush ripple, noise spikes, or momentary drops from resetting timer
+        if (consecutiveZeroSamples >= 16) {
           setMachineRunning(false);
           consecutiveZeroSamples = 0;
         }
@@ -821,9 +850,10 @@ document.addEventListener("DOMContentLoaded", () => {
       const elapsedMs = now - lastTimestamp;
       if (elapsedMs > 0 && elapsedMs < 60000) {
         const elapsedHours = elapsedMs / (1000 * 60 * 60);
-        const wattHoursDelta = displayPower * elapsedHours;
+        const effectivePower = displayPower > 0 ? displayPower : (isMachineRunning ? (voltage * (lastKnownActiveCurrent || 0.19)) : 0.0);
+        const wattHoursDelta = effectivePower * elapsedHours;
 
-        if (isMachineRunning && isMotorActive) {
+        if (isMachineRunning) {
           deviceWattHours += wattHoursDelta;
           sessionRunWattHours += wattHoursDelta;
         }
@@ -1027,10 +1057,20 @@ document.addEventListener("DOMContentLoaded", () => {
 
     try {
       const data = JSON.parse(trimmed);
-      const currentA = typeof data.current === "number" ? Math.max(0, data.current) : 0.0;
+      let currentA = typeof data.current === "number" ? Math.max(0, data.current) : 0.0;
+      
+      // Hardware Delta-mV Fallback: If firmware deadband clamped current to 0, but raw delta_mv shows shift under load:
+      if (currentA < runningCurrentThreshold && typeof data.delta_mv === "number" && Math.abs(data.delta_mv) >= 3.0) {
+        const sens = (selectSensorModel && parseFloat(selectSensorModel.value)) || 100.0;
+        const estCurrent = Math.abs(data.delta_mv) / sens;
+        if (estCurrent >= runningCurrentThreshold) {
+          currentA = estCurrent;
+        }
+      }
+
       lastRawCurrent = currentA;
       const voltage  = typeof data.voltage === "number" ? data.voltage : 5.0;
-      const powerW   = typeof data.power === "number"   ? Math.max(0, data.power) : (voltage * currentA);
+      const powerW   = (typeof data.power === "number" && data.power > 0) ? data.power : (voltage * currentA);
 
       // Update Live Hardware Diagnostic Readouts
       if (typeof data.raw_mv === "number" && diagRawMv) {
@@ -1051,10 +1091,10 @@ document.addEventListener("DOMContentLoaded", () => {
           if (diagStatusHint) {
             diagStatusHint.innerHTML = "⚠️ <strong>No signal on GPIO34 (0 mV):</strong> Ensure ACS712 VOUT is wired to GPIO34 and Common GND is connected to ESP32.";
           }
-        } else if (Math.abs(data.delta_mv || 0) > 8) {
+        } else if (Math.abs(data.delta_mv || 0) > 8 || currentA >= runningCurrentThreshold) {
           if (diagSignalDot) diagSignalDot.className = "diag-dot active";
           if (diagStatusHint) {
-            diagStatusHint.innerHTML = `⚡ <strong>Active Current Detected:</strong> Sensor shifted by ${data.delta_mv.toFixed(1)} mV under load.`;
+            diagStatusHint.innerHTML = `⚡ <strong>Active Current Detected:</strong> Sensor drawing ${currentA.toFixed(2)} A (${(data.delta_mv || 0).toFixed(1)} mV shift).`;
           }
         } else {
           if (diagSignalDot) diagSignalDot.className = "diag-dot";
@@ -1085,6 +1125,29 @@ document.addEventListener("DOMContentLoaded", () => {
     updateContinuousProjection(0.0);
   }
 
+  // Manual Start / Stop Machine Run Toggle
+  if (btnToggleRun) {
+    btnToggleRun.addEventListener("click", () => {
+      if (isMachineRunning) {
+        setMachineRunning(false);
+      } else {
+        setMachineRunning(true, true);
+      }
+    });
+  }
+
+  if (btnResetBaseline) {
+    btnResetBaseline.addEventListener("click", () => {
+      softwareZeroOffset = 0.0;
+      sendSerialCommand("RESET_ZERO");
+      const originalText = btnResetBaseline.innerHTML;
+      btnResetBaseline.textContent = "✓ Baseline Restored (2.5V)";
+      setTimeout(() => {
+        btnResetBaseline.innerHTML = originalText;
+      }, 1500);
+    });
+  }
+
   if (btnForceZero) {
     btnForceZero.addEventListener("click", () => {
       calibrateZeroBaseline();
@@ -1112,6 +1175,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const val = parseFloat(selectRunningThreshold.value);
       if (!isNaN(val) && val > 0) {
         runningCurrentThreshold = val;
+        sendSerialCommand(`DEADBAND:${val.toFixed(2)}`);
       }
     });
   }

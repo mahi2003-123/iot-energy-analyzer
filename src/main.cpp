@@ -20,7 +20,7 @@ const int SENSOR_PIN = 34; // ESP32 GPIO34 (ADC1 Channel 6, Input Only)
 float sensorSensitivityMvPerA = 100.0f; // ACS712-20A (100 mV/A). ACS712-05B: 185, ACS712-30A: 66
 float voltageDividerRatio     = 0.50f;  // 10k + 10k divider (0.50). Direct connection: 1.0
 float loadVoltage             = 5.0f;   // Fixed 5.0V DC supply
-float currentDeadband         = 0.08f;  // 80mA threshold to filter idle ADC noise from ACS712 sensor
+float currentDeadband         = 0.03f;  // 30mA threshold: sensitive enough for small motors while filtering noise
 
 // Timing & Averaging
 const unsigned long SERIAL_INTERVAL_MS = 150; // Continuous high-speed streaming (~7 readings / sec)
@@ -136,6 +136,8 @@ void checkIncomingSerialCommands() {
 
     if (cmd == "ZERO" || cmd == "TARE" || cmd == "CALIBRATE") {
       calibrateZeroCurrentOffset();
+    } else if (cmd == "RESET_ZERO" || cmd == "DEFAULT_ZERO") {
+      zeroCurrentSensorMv = 2500.0f;
     } else if (cmd.startsWith("SENS:")) {
       float s = cmd.substring(5).toFloat();
       if (s > 10.0f && s < 500.0f) sensorSensitivityMvPerA = s;

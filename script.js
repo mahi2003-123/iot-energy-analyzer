@@ -13,7 +13,7 @@ document.addEventListener("DOMContentLoaded", () => {
      1. CONSTANTS & SYSTEM STATE
      ========================================================================== */
   const BAUD_RATE = 115200;
-  let runningCurrentThreshold = 0.02; // Default 0.02 A (20 mA): ultra-responsive automatic motor start sensing
+  let runningCurrentThreshold = 0.015; // 0.015 A (15 mA): ultra-responsive automatic motor start sensing
   const MAX_CHART_POINTS = 30;
 
   let currentTariff = 8.00;
@@ -192,7 +192,6 @@ document.addEventListener("DOMContentLoaded", () => {
     lastTimestamp = Date.now();
 
     softwareZeroOffset = 0.0;
-    sendSerialCommand("ZERO");
 
     bannerMachineState.classList.remove("running");
     dotMachineState.className = "state-indicator-dot idle";
@@ -946,6 +945,14 @@ document.addEventListener("DOMContentLoaded", () => {
       lastTimestamp = Date.now();
       keepReading = true;
 
+      // Ensure clean 2.5V zero baseline and sync parameters to ESP32 on connect
+      setTimeout(() => {
+        sendSerialCommand("RESET_ZERO");
+        if (selectSensorModel) sendSerialCommand(`SENS:${selectSensorModel.value}`);
+        if (selectDividerMode) sendSerialCommand(`DIV:${selectDividerMode.value}`);
+        sendSerialCommand("DEADBAND:0.01");
+      }, 350);
+
       const textDecoder = new TextDecoderStream();
       readableStreamClosed = serialPort.readable.pipeTo(textDecoder.writable);
       const reader = textDecoder.readable.getReader();
@@ -1040,12 +1047,27 @@ document.addEventListener("DOMContentLoaded", () => {
       const data = JSON.parse(trimmed);
       let currentA = typeof data.current === "number" ? Math.max(0, data.current) : 0.0;
       
-      // Hardware Delta-mV Reconstruction: If firmware deadband clamped current to 0, but raw delta_mv shows shift under load:
-      if (currentA < runningCurrentThreshold && typeof data.delta_mv === "number" && Math.abs(data.delta_mv) >= 1.8) {
+      // 1. Hardware Delta-mV Reconstruction: If firmware deadband clamped current to 0, but raw delta_mv shows shift under load:
+      if (currentA < runningCurrentThreshold && typeof data.delta_mv === "number" && Math.abs(data.delta_mv) >= 0.8) {
         const sens = (selectSensorModel && parseFloat(selectSensorModel.value)) || 100.0;
         const estCurrent = Math.abs(data.delta_mv) / sens;
         if (estCurrent > currentA) {
           currentA = estCurrent;
+        }
+      }
+
+      // 2. Physical Raw Voltage Shift: If zero_mv was corrupted (tared while motor was running),
+      // compare directly against nominal resting 2500mV (VCC/2)
+      if (currentA < 0.012 && typeof data.raw_mv === "number" && data.raw_mv > 80) {
+        const divRatio = (selectDividerMode && parseFloat(selectDividerMode.value)) || 0.5;
+        const sens = (selectSensorModel && parseFloat(selectSensorModel.value)) || 100.0;
+        const sensorMv = data.raw_mv / divRatio;
+        const shiftFromNominal = Math.abs(sensorMv - 2500.0);
+        if (shiftFromNominal >= 1.2) {
+          const physicalCurrent = shiftFromNominal / sens;
+          if (physicalCurrent > currentA && physicalCurrent < 25.0) {
+            currentA = physicalCurrent;
+          }
         }
       }
 
@@ -1096,7 +1118,6 @@ document.addEventListener("DOMContentLoaded", () => {
   // Two-Way Hardware Calibration & Zero Baseline
   function calibrateZeroBaseline() {
     softwareZeroOffset = 0.0;
-    sendSerialCommand("ZERO");
     if (isMachineRunning) {
       setMachineRunning(false);
     }

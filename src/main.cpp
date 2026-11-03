@@ -163,8 +163,8 @@ void setup() {
   analogSetAttenuation(ADC_11db);
   pinMode(SENSOR_PIN, INPUT);
 
-  // Initial zero calibration
-  calibrateZeroCurrentOffset();
+  // Default to standard 2500mV (VCC/2) resting offset for ACS712
+  zeroCurrentSensorMv = 2500.0f;
 
   lastSerialTime     = millis();
   lastEnergyCalcTime = millis();

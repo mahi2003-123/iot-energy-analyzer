@@ -200,7 +200,7 @@ document.addEventListener("DOMContentLoaded", () => {
     consecutiveZeroSamples = 0;
     lastTimestamp = Date.now();
 
-    softwareZeroOffset = 0.0;
+    softwareZeroOffset = lastRawCurrent;
     sendSerialCommand("ZERO");
 
     bannerMachineState.classList.remove("running");
@@ -324,6 +324,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (connected) {
       isAutoTaring = true;
       autoTareSamples = [];
+      softwareZeroOffset = 0.0;
       elDeviceStatus.className = "status-badge connected";
       elDeviceStatusText.textContent = "Connected (USB)";
       btnConnectUsb.textContent = "🔌 Disconnect";
@@ -825,20 +826,44 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  function handleTelemetryData(currentA, voltage, powerW) {
+  function handleTelemetryData(rawCurrentA, voltage, rawPowerW) {
     const now = Date.now();
 
-    // Sanity filter for un-tared baseline offset:
-    // A 5V DC hobby motor draws between 0.02A and 2.5A.
-    // If incoming current is > 3.0A (e.g. 22.16A) while the machine is not running,
-    // this is 100% an un-tared resting offset. Auto-send ZERO and suppress false start!
-    if (currentA > 3.0 && !isMachineRunning) {
-      sendSerialCommand("ZERO");
+    // 1. Auto-Tare on Connection: Calibrate baseline resting offset automatically
+    if (isAutoTaring) {
+      autoTareSamples.push(rawCurrentA);
+      if (autoTareSamples.length >= 2) {
+        softwareZeroOffset = autoTareSamples.reduce((a, b) => a + b, 0) / autoTareSamples.length;
+        isAutoTaring = false;
+        sendSerialCommand("ZERO");
+      }
       renderDeviceMetrics(0.0, 0.0, deviceWattHours, (deviceWattHours / 1000.0) * currentTariff);
       return;
     }
 
-    // Motor Active Sensing with Hysteresis & Delta-mV backup:
+    // 2. If an initial uncalibrated offset arrives (> 1.5 A) when not running:
+    if (softwareZeroOffset === 0.0 && rawCurrentA > 1.5 && !isMachineRunning) {
+      softwareZeroOffset = rawCurrentA;
+      sendSerialCommand("ZERO");
+    }
+
+    // 3. Compute net current by subtracting software zero baseline:
+    let currentA = Math.max(0, rawCurrentA - softwareZeroOffset);
+
+    // Dynamic resting baseline downward tracking:
+    if (rawCurrentA < softwareZeroOffset && !isMachineRunning) {
+      softwareZeroOffset = rawCurrentA;
+      currentA = 0.0;
+    }
+
+    // Apply sensitivity floor: ignore sub-8mA noise
+    if (currentA < 0.008) {
+      currentA = 0.0;
+    }
+
+    const powerW = currentA > 0 ? (voltage * currentA) : 0.0;
+
+    // 4. Motor Active Sensing with Hysteresis:
     // - To START automatically: Current >= threshold (default 0.02 A) OR sensor delta >= 2.0 mV
     // - To MAINTAIN running state: Holds down to 0.008 A OR sensor delta >= 1.0 mV (prevents brush ripple cutoffs)
     const isSensorActive = isMachineRunning 
@@ -862,9 +887,8 @@ document.addEventListener("DOMContentLoaded", () => {
     } else {
       if (isMachineRunning && !manualRunActive) {
         consecutiveZeroSamples++;
-        // Confirmed OFF after 4 consecutive zero readings (4.0 seconds at 1.0s stream interval)
-        // Prevents commutator brush ripple or transient noise dips from stopping the timer
-        if (consecutiveZeroSamples >= 4) {
+        // Confirmed OFF after 3 consecutive zero readings (3.0 seconds at 1.0s stream interval)
+        if (consecutiveZeroSamples >= 3) {
           setMachineRunning(false);
           consecutiveZeroSamples = 0;
         }
@@ -1121,10 +1145,10 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         // Live Health Analysis of GPIO34 Wiring
-        if (data.raw_mv < 50) {
+        if (data.raw_mv < 300) {
           if (diagSignalDot) diagSignalDot.className = "diag-dot warn";
           if (diagStatusHint) {
-            diagStatusHint.innerHTML = "⚠️ <strong>No signal on GPIO34 (0 mV):</strong> Ensure ACS712 VOUT is wired to GPIO34 and Common GND is connected to ESP32.";
+            diagStatusHint.innerHTML = `⚠️ <strong>Low/Floating Signal on GPIO34 (${Math.round(data.raw_mv)} mV):</strong> ACS712 resting voltage should be ~1250 mV (with 10k divider) or ~2500 mV (direct). Check that ACS712 VCC is on 5V (not 3.3V) and VOUT is on GPIO34.`;
           }
         } else if (Math.abs(data.delta_mv || 0) > 6 || currentA >= runningCurrentThreshold) {
           if (diagSignalDot) diagSignalDot.className = "diag-dot active";
@@ -1134,7 +1158,7 @@ document.addEventListener("DOMContentLoaded", () => {
         } else {
           if (diagSignalDot) diagSignalDot.className = "diag-dot";
           if (diagStatusHint) {
-            diagStatusHint.innerHTML = `💡 <strong>Sensor Baseline:</strong> Resting at ${Math.round(data.raw_mv)} mV. Turn on your gadget to observe current.`;
+            diagStatusHint.innerHTML = `💡 <strong>Sensor Baseline Healthy:</strong> Resting at ${Math.round(data.raw_mv)} mV. Turn on your gadget to observe current.`;
           }
         }
       }
@@ -1149,7 +1173,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Two-Way Hardware Calibration & Zero Baseline
   function calibrateZeroBaseline() {
-    softwareZeroOffset = 0.0;
+    softwareZeroOffset = lastRawCurrent;
     sendSerialCommand("ZERO");
     if (isMachineRunning) {
       setMachineRunning(false);

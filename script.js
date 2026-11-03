@@ -826,46 +826,12 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  function handleTelemetryData(rawCurrentA, voltage, rawPowerW) {
+  function handleTelemetryData(currentA, voltage, powerW) {
     const now = Date.now();
 
-    // 1. Auto-Tare on Connection: Calibrate baseline resting offset automatically
-    if (isAutoTaring) {
-      autoTareSamples.push(rawCurrentA);
-      if (autoTareSamples.length >= 2) {
-        softwareZeroOffset = autoTareSamples.reduce((a, b) => a + b, 0) / autoTareSamples.length;
-        isAutoTaring = false;
-        sendSerialCommand("ZERO");
-      }
-      renderDeviceMetrics(0.0, 0.0, deviceWattHours, (deviceWattHours / 1000.0) * currentTariff);
-      return;
-    }
-
-    // 2. If an initial uncalibrated offset arrives (> 1.5 A) when not running:
-    if (softwareZeroOffset === 0.0 && rawCurrentA > 1.5 && !isMachineRunning) {
-      softwareZeroOffset = rawCurrentA;
-      sendSerialCommand("ZERO");
-    }
-
-    // 3. Compute net current by subtracting software zero baseline:
-    let currentA = Math.max(0, rawCurrentA - softwareZeroOffset);
-
-    // Dynamic resting baseline downward tracking:
-    if (rawCurrentA < softwareZeroOffset && !isMachineRunning) {
-      softwareZeroOffset = rawCurrentA;
-      currentA = 0.0;
-    }
-
-    // Apply sensitivity floor: ignore sub-8mA noise
-    if (currentA < 0.008) {
-      currentA = 0.0;
-    }
-
-    const powerW = currentA > 0 ? (voltage * currentA) : 0.0;
-
-    // 4. Motor Active Sensing with Hysteresis:
+    // 1. Motor Active Sensing with Hysteresis:
     // - To START automatically: Current >= threshold (default 0.02 A) OR sensor delta >= 2.0 mV
-    // - To MAINTAIN running state: Holds down to 0.008 A OR sensor delta >= 1.0 mV (prevents brush ripple cutoffs)
+    // - To MAINTAIN running state: Holds down to 0.008 A OR sensor delta >= 1.0 mV
     const isSensorActive = isMachineRunning 
       ? (currentA >= 0.008 || Math.abs(latestDeltaMv) >= 1.0)
       : (currentA >= runningCurrentThreshold || Math.abs(latestDeltaMv) >= 2.0);
@@ -873,7 +839,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const isMotorActive = isSensorActive || manualRunActive;
 
     // Display actual current and power
-    const displayCurrent = currentA >= 0.005 ? currentA : (manualRunActive && currentA > 0 ? currentA : (isMotorActive ? 0.01 : 0.0));
+    const displayCurrent = currentA >= 0.005 ? currentA : (manualRunActive && currentA > 0 ? currentA : 0.0);
     const displayPower   = displayCurrent > 0 ? (powerW > 0 ? powerW : (voltage * displayCurrent)) : 0.0;
 
     // Automatic Machine ON / OFF Tracking

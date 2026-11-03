@@ -73,15 +73,15 @@ float readSensorMilliVolts() {
  * Called at boot or anytime the user clicks "Tare / Zero Calibrate" in dashboard.
  */
 void calibrateZeroCurrentOffset() {
-  float totalSensorMv = 0.0f;
-  const int CAL_SAMPLES = 80;
-
+  uint32_t totalMv = 0;
+  const int CAL_SAMPLES = 100;
   for (int i = 0; i < CAL_SAMPLES; i++) {
-    totalSensorMv += readSensorMilliVolts();
-    delay(10);
+    totalMv += analogReadMilliVolts(SENSOR_PIN);
+    delay(5);
   }
-
-  zeroCurrentSensorMv = totalSensorMv / (float)CAL_SAMPLES;
+  rawAdcMilliVolts = (float)totalMv / (float)CAL_SAMPLES;
+  if (voltageDividerRatio <= 0.01f) voltageDividerRatio = 0.50f;
+  zeroCurrentSensorMv = rawAdcMilliVolts / voltageDividerRatio;
 }
 
 /**
@@ -90,16 +90,38 @@ void calibrateZeroCurrentOffset() {
 void performMeasurements() {
   unsigned long now = millis();
 
-  // 1. Read sensor voltage
-  float currentSensorMv = readSensorMilliVolts();
+  // Measure 100 samples over 100ms for robust DC + True-RMS motor sensing
+  const int SAMPLES = 100;
+  float sumMv = 0.0f;
+  float sumSqDiff = 0.0f;
+  float expectedZeroAdcMv = zeroCurrentSensorMv * voltageDividerRatio;
 
-  // 2. Compute voltage difference from calibrated zero offset
-  lastDeltaMv = currentSensorMv - zeroCurrentSensorMv;
+  for (int i = 0; i < SAMPLES; i++) {
+    float mv = (float)analogReadMilliVolts(SENSOR_PIN);
+    sumMv += mv;
+    float diff = mv - expectedZeroAdcMv;
+    sumSqDiff += diff * diff;
+    delayMicroseconds(1000); // 1ms interval
+  }
 
-  // 3. Current (A) = Delta_mV / Sensitivity (mV/A)
-  float rawCurrent = fabs(lastDeltaMv) / sensorSensitivityMvPerA;
+  rawAdcMilliVolts = sumMv / (float)SAMPLES;
+  float currentSensorMv = rawAdcMilliVolts / voltageDividerRatio;
 
-  // Apply deadband
+  // 1. Mean DC Shift
+  float dcDeltaMv = currentSensorMv - zeroCurrentSensorMv;
+
+  // 2. True-RMS AC/Ripple Shift (at sensor output)
+  float rmsAdcMv = sqrt(sumSqDiff / (float)SAMPLES);
+  float rmsSensorMv = rmsAdcMv / voltageDividerRatio;
+
+  // Use the stronger signal: captures both DC motors, commutator ripple, and AC loads
+  float effectiveDeltaMv = (fabs(dcDeltaMv) > rmsSensorMv) ? fabs(dcDeltaMv) : rmsSensorMv;
+  lastDeltaMv = effectiveDeltaMv;
+
+  // Current (A) = Delta_mV / Sensitivity (mV/A)
+  float rawCurrent = effectiveDeltaMv / sensorSensitivityMvPerA;
+
+  // Apply noise deadband
   if (rawCurrent < currentDeadband) {
     rawCurrent = 0.0f;
   }

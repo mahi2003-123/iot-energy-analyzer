@@ -1110,11 +1110,15 @@ document.addEventListener("DOMContentLoaded", () => {
           diagDeltaMv.textContent = `${dVal >= 0 ? '+' : ''}${dVal.toFixed(1)} mV`;
         }
 
-        // Live Health Analysis of GPIO34 Wiring
+        const activePin = typeof data.pin === "number" ? data.pin : 34;
+        const elPinLabel = document.getElementById("diag-pin-label");
+        if (elPinLabel) elPinLabel.textContent = `Pin Voltage (GPIO${activePin})`;
+
+        // Live Health Analysis of GPIO Wiring
         if (data.raw_mv < 300) {
           if (diagSignalDot) diagSignalDot.className = "diag-dot warn";
           if (diagStatusHint) {
-            diagStatusHint.innerHTML = `⚠️ <strong>Low/Floating Signal on GPIO34 (${Math.round(data.raw_mv)} mV):</strong> ACS712 resting voltage should be ~1250 mV (with 10k divider) or ~2500 mV (direct). Check that ACS712 VCC is on 5V (not 3.3V) and VOUT is on GPIO34.`;
+            diagStatusHint.innerHTML = `⚠️ <strong>Low/Floating Signal on GPIO${activePin} (${Math.round(data.raw_mv)} mV):</strong> ACS712 resting voltage should be ~1250 mV (with divider) or ~2500 mV (direct). Check that ACS712 VCC is on 5V and signal wire is plugged into GPIO${activePin}.`;
           }
         } else if (Math.abs(data.delta_mv || 0) > 6 || currentA >= runningCurrentThreshold) {
           if (diagSignalDot) diagSignalDot.className = "diag-dot active";

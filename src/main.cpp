@@ -14,7 +14,26 @@
    1. CONFIGURATION & SENSOR PARAMETERS
    ========================================================================== */
 
-const int SENSOR_PIN = 34; // ESP32 GPIO34 (ADC1 Channel 6, Input Only)
+int SENSOR_PIN = 34; // ESP32 ADC pin (Auto-detected: GPIO34, GPIO35, GPIO32, GPIO33, GPIO36)
+const int SCAN_PINS[] = {34, 35, 32, 33, 36, 39};
+const int NUM_SCAN_PINS = 6;
+
+int detectActiveSensorPin() {
+  // If current pin already has a healthy sensor resting voltage (500mV to 3100mV), use it
+  int curMv = analogReadMilliVolts(SENSOR_PIN);
+  if (curMv >= 500 && curMv <= 3100) {
+    return SENSOR_PIN;
+  }
+  // Otherwise scan all ADC1 pins for the pin where ACS712 is physically wired
+  for (int i = 0; i < NUM_SCAN_PINS; i++) {
+    int p = SCAN_PINS[i];
+    int mv = analogReadMilliVolts(p);
+    if (mv >= 500 && mv <= 3100) {
+      return p;
+    }
+  }
+  return SENSOR_PIN;
+}
 
 // Default Sensor Parameters (Can be dynamically adjusted over USB Serial)
 float sensorSensitivityMvPerA = 100.0f; // ACS712-20A (100 mV/A). ACS712-05B: 185, ACS712-30A: 66
@@ -73,6 +92,8 @@ float readSensorMilliVolts() {
  * Called at boot or anytime the user clicks "Tare / Zero Calibrate" in dashboard.
  */
 void calibrateZeroCurrentOffset() {
+  SENSOR_PIN = detectActiveSensorPin();
+  pinMode(SENSOR_PIN, INPUT);
   uint32_t totalMv = 0;
   const int CAL_SAMPLES = 100;
   for (int i = 0; i < CAL_SAMPLES; i++) {
@@ -158,6 +179,13 @@ void checkIncomingSerialCommands() {
 
     if (cmd == "ZERO" || cmd == "TARE" || cmd == "CALIBRATE" || cmd == "RESET_ZERO" || cmd == "DEFAULT_ZERO") {
       calibrateZeroCurrentOffset();
+    } else if (cmd.startsWith("PIN:")) {
+      int p = cmd.substring(4).toInt();
+      if (p == 34 || p == 35 || p == 32 || p == 33 || p == 36 || p == 39) {
+        SENSOR_PIN = p;
+        pinMode(SENSOR_PIN, INPUT);
+        calibrateZeroCurrentOffset();
+      }
     } else if (cmd.startsWith("SENS:")) {
       float s = cmd.substring(5).toFloat();
       if (s > 10.0f && s < 500.0f) sensorSensitivityMvPerA = s;
@@ -203,6 +231,7 @@ void loop() {
 
     // Stream single-line JSON packet with diagnostics
     Serial.print("{\"device\":\"ESP32 ACS712 Monitor\",");
+    Serial.print("\"pin\":");        Serial.print(SENSOR_PIN);                 Serial.print(",");
     Serial.print("\"voltage\":");    Serial.print(loadVoltage, 2);              Serial.print(",");
     Serial.print("\"current\":");    Serial.print(currentAmperes, 3);          Serial.print(",");
     Serial.print("\"power\":");      Serial.print(powerWatts, 2);              Serial.print(",");

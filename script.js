@@ -794,18 +794,15 @@ document.addEventListener("DOMContentLoaded", () => {
   function handleTelemetryData(currentA, voltage, powerW) {
     const now = Date.now();
 
-    // Hysteresis Sensing:
-    // When machine is OFF: requires currentA >= runningCurrentThreshold (default 0.02A / 20mA) to start.
-    // When machine is ON: maintains running state down to 0.012A (12mA) so low steady-state current never cuts off.
-    const isMotorActive = isMachineRunning 
-      ? (currentA >= 0.012) 
-      : (currentA >= runningCurrentThreshold);
+    // Motor Active Sensing:
+    // When motor starts working, currentA will be > 0.015 A (deadband on ESP32 is 0.02 A)
+    const isMotorActive = currentA > 0.015;
 
-    // Live display: show real measured current; only zero when truly at resting noise floor (< 0.008A)
-    const displayCurrent = currentA >= 0.008 ? currentA : 0.0;
+    // Display actual current and power
+    const displayCurrent = currentA > 0.01 ? currentA : 0.0;
     const displayPower   = displayCurrent > 0 ? (powerW > 0 ? powerW : (voltage * displayCurrent)) : 0.0;
 
-    // Automatic Machine ON/OFF Detection
+    // Automatic Machine ON / OFF Tracking
     if (isMotorActive) {
       consecutiveZeroSamples = 0;
       if (!isMachineRunning) {
@@ -816,9 +813,9 @@ document.addEventListener("DOMContentLoaded", () => {
     } else {
       if (isMachineRunning) {
         consecutiveZeroSamples++;
-        // Confirmed OFF after ~4.5 seconds of sustained resting baseline readings (30 samples @ 150ms)
-        // Prevents motor brush ripple, commutator gaps, or light load dips from stopping the timer
-        if (consecutiveZeroSamples >= 30) {
+        // Confirmed OFF after 2 consecutive zero readings (2.0 seconds at 1.0s stream interval)
+        // Stops the timer immediately when the motor stops and calculates final run duration and held cost
+        if (consecutiveZeroSamples >= 2) {
           setMachineRunning(false);
           consecutiveZeroSamples = 0;
         }
@@ -830,7 +827,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const elapsedMs = now - lastTimestamp;
       if (elapsedMs > 0 && elapsedMs < 60000) {
         const elapsedHours = elapsedMs / (1000 * 60 * 60);
-        const effectivePower = displayPower > 0 ? displayPower : (isMachineRunning ? (voltage * (sessionPeakCurrent || 0.15)) : 0.0);
+        const effectivePower = displayPower > 0 ? displayPower : (isMachineRunning ? (voltage * (sessionPeakCurrent || 0.19)) : 0.0);
         const wattHoursDelta = effectivePower * elapsedHours;
 
         if (isMachineRunning) {
@@ -1047,27 +1044,12 @@ document.addEventListener("DOMContentLoaded", () => {
       const data = JSON.parse(trimmed);
       let currentA = typeof data.current === "number" ? Math.max(0, data.current) : 0.0;
       
-      // 1. Hardware Delta-mV Reconstruction: If firmware deadband clamped current to 0, but raw delta_mv shows shift under load:
-      if (currentA < runningCurrentThreshold && typeof data.delta_mv === "number" && Math.abs(data.delta_mv) >= 0.8) {
+      // Fallback: If firmware deadband clamped current to 0, check raw delta_mv under load
+      if (currentA <= 0.01 && typeof data.delta_mv === "number" && Math.abs(data.delta_mv) >= 2.0) {
         const sens = (selectSensorModel && parseFloat(selectSensorModel.value)) || 100.0;
         const estCurrent = Math.abs(data.delta_mv) / sens;
         if (estCurrent > currentA) {
           currentA = estCurrent;
-        }
-      }
-
-      // 2. Physical Raw Voltage Shift: If zero_mv was corrupted (tared while motor was running),
-      // compare directly against nominal resting 2500mV (VCC/2)
-      if (currentA < 0.012 && typeof data.raw_mv === "number" && data.raw_mv > 80) {
-        const divRatio = (selectDividerMode && parseFloat(selectDividerMode.value)) || 0.5;
-        const sens = (selectSensorModel && parseFloat(selectSensorModel.value)) || 100.0;
-        const sensorMv = data.raw_mv / divRatio;
-        const shiftFromNominal = Math.abs(sensorMv - 2500.0);
-        if (shiftFromNominal >= 1.2) {
-          const physicalCurrent = shiftFromNominal / sens;
-          if (physicalCurrent > currentA && physicalCurrent < 25.0) {
-            currentA = physicalCurrent;
-          }
         }
       }
 

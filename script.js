@@ -37,6 +37,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Active Running Session State (Between ON and OFF)
   let isMachineRunning = false;
+  let manualRunActive = false;
+  let latestDeltaMv = 0.0;
   let sessionStartTime = null;
   let sessionDurationSeconds = 0;
   let sessionTimerInterval = null;
@@ -111,6 +113,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const elProjBaseDesc     = document.getElementById("proj-base-desc");
 
   // Sensor Live Diagnostics & Two-Way Calibration
+  const btnToggleRun       = document.getElementById("btn-toggle-run");
   const btnResetBaseline   = document.getElementById("btn-reset-baseline");
   const btnTareSensor      = document.getElementById("btn-tare-sensor");
   const btnForceZero       = document.getElementById("btn-force-zero");
@@ -165,12 +168,18 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Full Reset to Zero for Testing New Machine
   function resetAllToZeroForNewMachine(isNewDevice = false) {
+    manualRunActive = false;
     if (isMachineRunning) {
       isMachineRunning = false;
       if (sessionTimerInterval) {
         clearInterval(sessionTimerInterval);
         sessionTimerInterval = null;
       }
+    }
+
+    if (btnToggleRun) {
+      btnToggleRun.textContent = "▶ Start Motor Run";
+      btnToggleRun.classList.remove("is-running");
     }
 
     if (isNewDevice) {
@@ -232,6 +241,19 @@ document.addEventListener("DOMContentLoaded", () => {
       setTimeout(() => {
         btnNewDevice.innerHTML = originalText;
       }, 1200);
+    });
+  }
+
+  // Manual Start / Stop Motor Run Button in Banner
+  if (btnToggleRun) {
+    btnToggleRun.addEventListener("click", () => {
+      if (isMachineRunning) {
+        manualRunActive = false;
+        setMachineRunning(false);
+      } else {
+        manualRunActive = true;
+        setMachineRunning(true);
+      }
     });
   }
 
@@ -442,6 +464,11 @@ document.addEventListener("DOMContentLoaded", () => {
       if (statsSession) statsSession.style.display = "flex";
       timerSession.textContent = "Run Time: 00:00";
 
+      if (btnToggleRun) {
+        btnToggleRun.textContent = "⏹ Stop Motor Run";
+        btnToggleRun.classList.add("is-running");
+      }
+
       if (sessionTimerInterval) clearInterval(sessionTimerInterval);
       sessionTimerInterval = setInterval(() => {
         if (!sessionStartTime) return;
@@ -495,6 +522,12 @@ document.addEventListener("DOMContentLoaded", () => {
       descMachineState.textContent = `Motor stopped. Run duration: ${stoppedDurationStr} | Run cost: ₹${formatRunCostValue(lastCompletedRunCost)} calculated & held.`;
       if (statsSession) statsSession.style.display = "none";
       timerSession.textContent = `Run Time: ${stoppedDurationStr} (Stopped)`;
+
+      manualRunActive = false;
+      if (btnToggleRun) {
+        btnToggleRun.textContent = "▶ Start Motor Run";
+        btnToggleRun.classList.remove("is-running");
+      }
 
       // Reset run session state
       sessionRunWattHours = 0.0;
@@ -794,12 +827,17 @@ document.addEventListener("DOMContentLoaded", () => {
   function handleTelemetryData(currentA, voltage, powerW) {
     const now = Date.now();
 
-    // Motor Active Sensing:
-    // When motor starts working, currentA will be >= runningCurrentThreshold (0.006 A / 6 mA)
-    const isMotorActive = currentA >= runningCurrentThreshold;
+    // Motor Active Sensing with Hysteresis & Delta-mV backup:
+    // - To START automatically: Current >= threshold (0.006 A) OR sensor delta >= 1.5 mV
+    // - To MAINTAIN running state: Holds down to 0.003 A OR sensor delta >= 1.0 mV (prevents brush ripple cutoffs)
+    const isSensorActive = isMachineRunning 
+      ? (currentA >= 0.003 || Math.abs(latestDeltaMv) >= 1.0)
+      : (currentA >= runningCurrentThreshold || Math.abs(latestDeltaMv) >= 1.5);
+
+    const isMotorActive = isSensorActive || manualRunActive;
 
     // Display actual current and power
-    const displayCurrent = currentA >= 0.005 ? currentA : 0.0;
+    const displayCurrent = currentA >= 0.005 ? currentA : (manualRunActive && currentA > 0 ? currentA : (isMotorActive ? 0.01 : 0.0));
     const displayPower   = displayCurrent > 0 ? (powerW > 0 ? powerW : (voltage * displayCurrent)) : 0.0;
 
     // Automatic Machine ON / OFF Tracking
@@ -811,11 +849,11 @@ document.addEventListener("DOMContentLoaded", () => {
       sessionPeakCurrent = Math.max(sessionPeakCurrent, displayCurrent);
       sessionCurrentSamples.push(displayCurrent);
     } else {
-      if (isMachineRunning) {
+      if (isMachineRunning && !manualRunActive) {
         consecutiveZeroSamples++;
-        // Confirmed OFF after 2 consecutive zero readings (2.0 seconds at 1.0s stream interval)
-        // Stops the timer immediately when the motor stops and calculates final run duration and held cost
-        if (consecutiveZeroSamples >= 2) {
+        // Confirmed OFF after 4 consecutive zero readings (4.0 seconds at 1.0s stream interval)
+        // Prevents commutator brush ripple or transient noise dips from stopping the timer
+        if (consecutiveZeroSamples >= 4) {
           setMachineRunning(false);
           consecutiveZeroSamples = 0;
         }
@@ -1042,6 +1080,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     try {
       const data = JSON.parse(trimmed);
+      latestDeltaMv = typeof data.delta_mv === "number" ? data.delta_mv : 0.0;
       let currentA = typeof data.current === "number" ? Math.max(0, data.current) : 0.0;
       
       // Fallback: If firmware deadband clamped current to 0, reconstruct from ANY delta_mv under load

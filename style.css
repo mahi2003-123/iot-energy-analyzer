@@ -667,6 +667,30 @@ body {
   flex-wrap: wrap;
 }
 
+#btn-toggle-run {
+  background: #2563eb;
+  color: #ffffff;
+  border: 1px solid #1d4ed8;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+#btn-toggle-run:hover {
+  background: #1d4ed8;
+}
+
+#btn-toggle-run.is-running {
+  background: #dc2626 !important;
+  border-color: #b91c1c !important;
+  color: #ffffff !important;
+  box-shadow: 0 0 10px rgba(220, 38, 38, 0.45);
+}
+
+#btn-toggle-run.is-running:hover {
+  background: #b91c1c !important;
+}
+
 #btn-reset-baseline {
   cursor: pointer;
   transition: all 0.2s ease;
